@@ -70,7 +70,7 @@ ignore = {
 def parse_table_of_strings(content: str) -> dict:
     """Parses files that contain a simple Lua table of strings."""
     globals_map = {}
-    pattern = re.compile(r'^\s*"([^"]+)",?\s*$')
+    pattern = re.compile(r'^\s*["\']([^"\']+)["\'],?\s*$')
     for line in content.splitlines():
         line = line.strip()
         if line.startswith('--') or not line:
@@ -124,12 +124,12 @@ def parse_api_definitions(content: str) -> dict:
         if s not in globals_map: # Don't overwrite a complex table with a simple entry
             globals_map[s] = True
             
-    return globals_map
+    return dict(globals_map)
 
 def parse_enum_definitions(content: str) -> dict:
     """
     Parses LuaEnum files by finding all global constants (LE_*) and all
-    tables assigned to a capitalized name (like Enum and Constants).
+    tables assigned to a capitalized name (like Enum and Constants) and their fields.
     """
     globals_map = defaultdict(list)
     simple_globals = set()
@@ -139,25 +139,28 @@ def parse_enum_definitions(content: str) -> dict:
         simple_globals.add(match.group(1))
 
     # 2. Top-level tables (Enum, Constants) and their direct children
-    for match in re.finditer(r"^\s*(Enum|Constants)\.([A-Za-z0-9_]+)\s*=", content, re.MULTILINE):
-        parent, child = match.groups()
-        globals_map[parent].append(child)
+    # This pattern captures the parent table (Enum or Constants) and the nested table definitions.
+    table_block_pattern = re.compile(r"^\s*(Enum|Constants)\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
+    field_pattern = re.compile(r"^\s*([A-Z][A-Za-z0-9_]+)\s*=\s*\{", re.MULTILINE)
 
-    # Ensure parent tables are defined even if they have no fields in this file
-    if "Enum" not in globals_map: globals_map["Enum"] = []
-    if "Constants" not in globals_map: globals_map["Constants"] = []
+    for block_match in table_block_pattern.finditer(content):
+        parent_table = block_match.group(1)
+        table_content = block_match.group(2)
+        
+        for field_match in field_pattern.finditer(table_content):
+            globals_map[parent_table].append(field_match.group(1))
 
     # Convert simple globals to the final map format
     for s in simple_globals:
         globals_map[s] = True
 
-    return globals_map
+    return dict(globals_map)
 
 # --- Main Logic ---
 
 def fetch_and_parse_all() -> dict:
     """Iterates through all resource files, downloads them, and applies the correct parser."""
-    all_globals = {}
+    all_globals = defaultdict(list)
     
     parser_functions = {
         "parse_table_of_strings": parse_table_of_strings,
@@ -184,13 +187,13 @@ def fetch_and_parse_all() -> dict:
         
         # Merge dictionaries
         for key, value in found_globals.items():
-            if isinstance(value, list):
-                if key not in all_globals or all_globals[key] is True:
+            if value is True:
+                if not isinstance(all_globals.get(key), list):
+                    all_globals[key] = True
+            elif isinstance(value, list):
+                if all_globals[key] is True: # If it was previously simple, upgrade to list
                     all_globals[key] = []
                 all_globals[key].extend(value)
-            else: # value is True
-                if key not in all_globals:
-                    all_globals[key] = True
 
     # 2. Parse custom globals from the local file
     print(f"Checking for custom globals in {CUSTOM_GLOBALS_PATH}...")
@@ -199,7 +202,9 @@ def fetch_and_parse_all() -> dict:
             content = f.read()
         custom_globals = parse_table_of_strings(content)
         print(f"--> Found {len(custom_globals)} custom globals.")
-        all_globals.update(custom_globals)
+        for key, value in custom_globals.items():
+             if key not in all_globals:
+                    all_globals[key] = value
     except FileNotFoundError:
         print(f"::notice::{CUSTOM_GLOBALS_PATH} not found. Creating an empty one for you.")
         with open(CUSTOM_GLOBALS_PATH, 'w', encoding='utf-8') as f:
@@ -212,7 +217,7 @@ def fetch_and_parse_all() -> dict:
         exit(1)
 
     print(f"\nSuccessfully extracted a total of {len(all_globals)} unique globals.")
-    return all_globals
+    return dict(all_globals)
 
 def update_luacheckrc(globals_dict: dict):
     """Updates the .luacheckrc file with the provided dictionary of globals."""
