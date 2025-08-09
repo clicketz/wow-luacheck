@@ -2,7 +2,7 @@ name: Update WoW Globals
 
 on:
   schedule:
-    - cron: '0 8 * * 1'  # Every Monday at 08:00 UTC
+    - cron: '0 20 * * 2'  # Every Tuesday at 12:00 PM PST (20:00 UTC)
   workflow_dispatch:      # Manual trigger
 
 jobs:
@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Needed for git diff detection
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,6 +28,10 @@ jobs:
         run: |
           count=$(python scripts/generate_wow_globals.py | tail -n1)
           echo "globals_count=$count" >> $GITHUB_OUTPUT
+
+      - name: Configure git for pushing with GITHUB_TOKEN
+        run: |
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
 
       - name: Commit and push changes
         run: |
