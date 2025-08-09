@@ -91,71 +91,53 @@ def parse_global_assignments(content: str) -> list[str]:
 
 def parse_api_definitions(content: str) -> list[str]:
     """
-    Parses complex API files that define both functions and global tables,
-    including fields within those tables, by tracking nested braces.
+    Parses complex API files by finding all function definitions, C_TableName assignments,
+    and the contents of special local tables like GlobalAPI and LuaAPI.
     """
-    globals_list = []
-    # Matches: function MyFunction(...)
-    func_pattern = re.compile(r'^\s*function\s+([A-Za-z0-9_:]+)\s*\(')
-    # Matches: MyTable = {
-    table_pattern = re.compile(r'^\s*([A-Z][a-zA-Z0-9_]+)\s*=\s*\{')
-    # Matches fields inside a table, like: 'ClearColorOverrides', or "ClearColorOverrides"
-    field_pattern = re.compile(r"^\s*['\"]([^'\"]+)['\"],?\s*$")
+    globals_list = set()
+    string_pattern = re.compile(r"['\"]([^'\"]+)['\"]")
 
-    brace_depth = 0
-    in_fields_block = False
-    fields_start_depth = 0
+    # 1. Global functions: function MyFunction(...)
+    for match in re.finditer(r"^\s*function\s+([A-Za-z0-9_:]+)", content, re.MULTILINE):
+        globals_list.add(match.group(1).split(':')[0])
 
-    for line in content.splitlines():
-        stripped_line = line.strip()
+    # 2. C_Tables and their fields: C_Table = { fields = { 'field1', ... } }
+    # This pattern captures the C_Table name and the entire content of its 'fields' sub-table.
+    c_table_pattern = re.compile(r"^\s*(C_[A-Za-z0-9_]+)\s*=\s*\{.*?fields\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
+    for table_match in c_table_pattern.finditer(content):
+        table_name = table_match.group(1)
+        fields_content = table_match.group(2)
+        globals_list.add(table_name)
+        for field_match in string_pattern.finditer(fields_content):
+            globals_list.add(field_match.group(1))
 
-        # If we are not inside any table, look for new functions or tables
-        if brace_depth == 0:
-            func_match = func_pattern.match(stripped_line)
-            if func_match:
-                base_name = func_match.group(1).split(':')[0]
-                globals_list.append(base_name)
-
-            table_match = table_pattern.match(stripped_line)
-            if table_match:
-                table_name = table_match.group(1)
-                globals_list.append(table_name)
-        
-        # If we are inside a table, check if we are entering a fields block
-        if brace_depth > 0 and not in_fields_block:
-            if 'fields = {' in stripped_line:
-                in_fields_block = True
-                # Record the brace depth at which this fields block started
-                fields_start_depth = brace_depth
-
-        # If we are inside a fields block, try to match fields
-        if in_fields_block:
-            field_match = field_pattern.match(stripped_line)
-            if field_match:
-                globals_list.append(field_match.group(1))
-
-        # Update brace depth for the current line AFTER processing it
-        brace_depth += line.count('{')
-        brace_depth -= line.count('}')
-
-        # If we were in a fields block and the depth is now equal to
-        # the depth where it started, we have exited the block.
-        if in_fields_block and brace_depth <= fields_start_depth:
-            in_fields_block = False
+    # 3. Strings from local API tables (GlobalAPI, LuaAPI)
+    local_api_pattern = re.compile(r"^\s*local\s+(?:GlobalAPI|LuaAPI)\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
+    for api_match in local_api_pattern.finditer(content):
+        api_content = api_match.group(1)
+        for string_match in string_pattern.finditer(api_content):
+            globals_list.add(string_match.group(1))
             
-    return globals_list
+    return list(globals_list)
 
 def parse_enum_definitions(content: str) -> list[str]:
-    """Parses files that define Lua 'enums' (tables assigned to Enum.*)."""
-    # Allow for optional whitespace at the start of the line
-    pattern = re.compile(r'^\s*(Enum\.[A-Za-z0-9_]+)\s*=')
-    globals_list = []
-    for line in content.splitlines():
-        # Strip the line to handle potential whitespace
-        match = pattern.match(line.strip())
-        if match:
-            globals_list.append(match.group(1))
-    return globals_list
+    """
+    Parses LuaEnum files by finding all global constants (LE_*) and all
+    tables assigned to a capitalized name (like Enum and Constants).
+    """
+    globals_list = set()
+
+    # 1. LE_ and NUM_LE_ constants
+    for match in re.finditer(r"^\s*((?:NUM_)?LE_[A-Z0-9_]+)\s*=", content, re.MULTILINE):
+        globals_list.add(match.group(1))
+
+    # 2. Top-level tables (Enum, Constants) and their direct children
+    # This finds all capitalized words that are assigned a table.
+    # This will capture Enum, Constants, and all the tables nested one level deep inside them.
+    for match in re.finditer(r"^\s*([A-Z][A-Za-z0-9_]+)\s*=\s*\{", content, re.MULTILINE):
+        globals_list.add(match.group(1))
+
+    return list(globals_list)
 
 # --- Main Logic ---
 
