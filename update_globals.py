@@ -7,6 +7,10 @@ from collections import defaultdict
 # --- Configuration ---
 # A dictionary mapping a descriptive name to its raw file URL and a parsing function.
 RESOURCE_FILES = {
+    "FrameXML": {
+        "url": "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/FrameXML.lua",
+        "parser": "parse_simple_globals"
+    },
     "GlobalStrings": {
         "url": "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/GlobalStrings/enUS.lua",
         "parser": "parse_global_assignments"
@@ -73,8 +77,7 @@ def parse_table_of_strings(content: str) -> dict:
     pattern = re.compile(r'^\s*["\']([^"\']+)["\'],?\s*$')
     for line in content.splitlines():
         line = line.strip()
-        if line.startswith('--') or not line:
-            continue
+        if line.startswith('--') or not line: continue
         match = pattern.match(line)
         if match:
             globals_map[match.group(1)] = True
@@ -90,48 +93,55 @@ def parse_global_assignments(content: str) -> dict:
             globals_map[match.group(1)] = True
     return globals_map
 
-def parse_api_definitions(content: str) -> dict:
-    """
-    Parses complex API files by finding all function definitions, C_TableName assignments,
-    and the contents of special local tables like GlobalAPI and LuaAPI.
-    """
-    globals_map = defaultdict(list)
-    simple_globals = set()
-    string_pattern = re.compile(r"['\"]([^'\"]+)['\"]")
+def parse_simple_globals(content: str) -> dict:
+    """Parses files with simple function definitions and variable assignments."""
+    globals_map = {}
+    # Matches: function MyFunction(...)
+    func_pattern = re.compile(r"^\s*function\s+([A-Za-z0-9_:]+)")
+    # Matches: MyGlobal = ...
+    var_pattern = re.compile(r"^\s*([A-Z][A-Za-z0-9_]+)\s*=")
+    for line in content.splitlines():
+        func_match = func_pattern.match(line)
+        if func_match:
+            globals_map[func_match.group(1).split(':')[0]] = True
+            continue
+        var_match = var_pattern.match(line)
+        if var_match:
+            globals_map[var_match.group(1)] = True
+    return globals_map
 
-    # 1. Global functions: function MyFunction(...)
+def parse_api_definitions(content: str) -> dict:
+    """Parses complex API files by finding C_TableName assignments and their fields."""
+    globals_map = defaultdict(lambda: {'fields': set()})
+    simple_globals = set()
+    
+    # Process C_ API tables
+    c_table_pattern = re.compile(r"^\s*(C_[A-Za-z0-9_]+)\s*=\s*\{.*?fields\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
+    string_pattern = re.compile(r"['\"]([^'\"]+)['\"]")
+    for table_match in c_table_pattern.finditer(content):
+        table_name, fields_content = table_match.groups()
+        for field_match in string_pattern.finditer(fields_content):
+            globals_map[table_name]['fields'].add(field_match.group(1))
+
+    # Process simple global functions and local API tables
     for match in re.finditer(r"^\s*function\s+([A-Za-z0-9_:]+)", content, re.MULTILINE):
         simple_globals.add(match.group(1).split(':')[0])
 
-    # 2. C_Tables and their fields: C_Table = { fields = { 'field1', ... } }
-    c_table_pattern = re.compile(r"^\s*(C_[A-Za-z0-9_]+)\s*=\s*\{.*?fields\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
-    for table_match in c_table_pattern.finditer(content):
-        table_name = table_match.group(1)
-        fields_content = table_match.group(2)
-        
-        for field_match in string_pattern.finditer(fields_content):
-            globals_map[table_name].append(field_match.group(1))
-
-    # 3. Strings from local API tables (GlobalAPI, LuaAPI)
     local_api_pattern = re.compile(r"^\s*local\s+(?:GlobalAPI|LuaAPI)\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
     for api_match in local_api_pattern.finditer(content):
-        api_content = api_match.group(1)
-        for string_match in string_pattern.finditer(api_content):
+        for string_match in string_pattern.finditer(api_match.group(1)):
             simple_globals.add(string_match.group(1))
 
-    # Convert simple globals to the final map format
     for s in simple_globals:
-        if s not in globals_map: # Don't overwrite a complex table with a simple entry
+        if s not in globals_map:
             globals_map[s] = True
-            
-    return dict(globals_map)
+
+    return {k: ({'fields': sorted(list(v['fields']))} if isinstance(v, dict) else v) for k, v in globals_map.items()}
+
 
 def parse_enum_definitions(content: str) -> dict:
-    """
-    Parses LuaEnum files by finding all global constants (LE_*) and all
-    tables assigned to a capitalized name (like Enum and Constants) and their fields.
-    """
-    globals_map = defaultdict(list)
+    """Parses LuaEnum files for Enum tables and LE_ constants."""
+    globals_map = defaultdict(lambda: defaultdict(set))
     simple_globals = set()
 
     # 1. LE_ and NUM_LE_ constants
@@ -139,40 +149,55 @@ def parse_enum_definitions(content: str) -> dict:
         simple_globals.add(match.group(1))
 
     # 2. Top-level tables (Enum, Constants) and their direct children
-    # This pattern captures the parent table (Enum or Constants) and the nested table definitions.
     table_block_pattern = re.compile(r"^\s*(Enum|Constants)\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
-    field_pattern = re.compile(r"^\s*([A-Z][A-Za-z0-9_]+)\s*=\s*\{", re.MULTILINE)
+    sub_table_pattern = re.compile(r"^\s*([A-Z][A-Za-z0-9_]+)\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
+    field_pattern = re.compile(r"^\s*([A-Z][A-Za-z0-9_]+)\s*=", re.MULTILINE)
 
     for block_match in table_block_pattern.finditer(content):
-        parent_table = block_match.group(1)
-        table_content = block_match.group(2)
-        
-        for field_match in field_pattern.finditer(table_content):
-            globals_map[parent_table].append(field_match.group(1))
+        parent_table, table_content = block_match.groups()
+        for sub_table_match in sub_table_pattern.finditer(table_content):
+            sub_table_name, sub_table_content = sub_table_match.groups()
+            for field_match in field_pattern.finditer(sub_table_content):
+                globals_map[parent_table][sub_table_name].add(field_match.group(1))
 
-    # Convert simple globals to the final map format
     for s in simple_globals:
         globals_map[s] = True
 
-    return dict(globals_map)
+    # Convert sets to sorted lists for consistent output
+    final_map = {}
+    for k, v in globals_map.items():
+        if isinstance(v, defaultdict):
+            final_map[k] = {sub_k: sorted(list(sub_v)) for sub_k, sub_v in v.items()}
+        else:
+            final_map[k] = v
+    return final_map
+
 
 # --- Main Logic ---
 
+def merge_globals(d1, d2):
+    """Recursively merges two dictionaries of globals."""
+    for k, v in d2.items():
+        if k in d1 and isinstance(d1[k], dict) and isinstance(v, dict):
+            merge_globals(d1[k], v)
+        else:
+            d1[k] = v
+
 def fetch_and_parse_all() -> dict:
     """Iterates through all resource files, downloads them, and applies the correct parser."""
-    all_globals = defaultdict(list)
+    all_globals = {}
     
     parser_functions = {
         "parse_table_of_strings": parse_table_of_strings,
         "parse_global_assignments": parse_global_assignments,
         "parse_api_definitions": parse_api_definitions,
         "parse_enum_definitions": parse_enum_definitions,
+        "parse_simple_globals": parse_simple_globals,
     }
 
-    # 1. Fetch globals from Blizzard's files
     for name, info in RESOURCE_FILES.items():
-        url = info["url"]
-        parser_func = parser_functions[info["parser"]]
+        url, parser_func_name = info["url"], info["parser"]
+        parser_func = parser_functions[parser_func_name]
         
         print(f"Downloading and parsing '{name}' from {url}...")
         try:
@@ -184,66 +209,54 @@ def fetch_and_parse_all() -> dict:
 
         found_globals = parser_func(response.text)
         print(f"--> Found {len(found_globals)} globals in '{name}'.")
-        
-        # Merge dictionaries
-        for key, value in found_globals.items():
-            if value is True:
-                if not isinstance(all_globals.get(key), list):
-                    all_globals[key] = True
-            elif isinstance(value, list):
-                if all_globals[key] is True: # If it was previously simple, upgrade to list
-                    all_globals[key] = []
-                all_globals[key].extend(value)
+        merge_globals(all_globals, found_globals)
 
-    # 2. Parse custom globals from the local file
     print(f"Checking for custom globals in {CUSTOM_GLOBALS_PATH}...")
     try:
         with open(CUSTOM_GLOBALS_PATH, 'r', encoding='utf-8') as f:
-            content = f.read()
-        custom_globals = parse_table_of_strings(content)
+            custom_globals = parse_table_of_strings(f.read())
         print(f"--> Found {len(custom_globals)} custom globals.")
-        for key, value in custom_globals.items():
-             if key not in all_globals:
-                    all_globals[key] = value
+        merge_globals(all_globals, custom_globals)
     except FileNotFoundError:
         print(f"::notice::{CUSTOM_GLOBALS_PATH} not found. Creating an empty one for you.")
         with open(CUSTOM_GLOBALS_PATH, 'w', encoding='utf-8') as f:
             f.write("-- Add your own custom global variables here.\n")
-            f.write("-- The script will automatically merge these with the fetched globals.\n")
-            f.write('-- Use the format "MyGlobal", one per line.\n\n')
 
     if not all_globals:
         print("::error::No globals were extracted in total. Halting execution.")
         exit(1)
 
     print(f"\nSuccessfully extracted a total of {len(all_globals)} unique globals.")
-    return dict(all_globals)
+    return all_globals
+
+def format_globals_recursive(data, indent=1):
+    """Recursively formats the globals dictionary into a Lua-compatible string."""
+    parts = []
+    indent_str = "    " * indent
+    
+    for key in sorted(data.keys()):
+        value = data[key]
+        if value is True:
+            parts.append(f'{indent_str}"{key}"')
+        elif isinstance(value, dict):
+            sub_parts = format_globals_recursive(value, indent + 1)
+            table_str = f"{indent_str}{key} = {{\n"
+            table_str += ",\n".join(sub_parts)
+            table_str += f"\n{indent_str}}}"
+            parts.append(table_str)
+        elif isinstance(value, list): # This is for 'fields' or simple lists of strings
+             field_str = f"{indent_str}{key} = {{\n"
+             field_str += ",\n".join([f"{indent_str}    '{f}'" for f in sorted(value)])
+             field_str += f"\n{indent_str}}}"
+             parts.append(field_str)
+    return parts
 
 def update_luacheckrc(globals_dict: dict):
     """Updates the .luacheckrc file with the provided dictionary of globals."""
     print(f"Updating {LUACHECKRC_PATH}...")
     
-    output_parts = []
-    # Sort by global name for consistent output
-    for key in sorted(globals_dict.keys()):
-        value = globals_dict[key]
-        
-        if value is True:
-            # Simple global: "MyGlobal"
-            output_parts.append(f'    "{key}"')
-        elif isinstance(value, list):
-            # Complex global: C_Table = { fields = { ... } }
-            # Deduplicate and sort fields
-            sorted_fields = sorted(list(set(value)))
-
-            complex_str = f"    {key} = {{\n"
-            complex_str += "        fields = {\n"
-            complex_str += ",\n".join([f"            '{field}'" for field in sorted_fields])
-            complex_str += "\n        }\n    }"
-            output_parts.append(complex_str)
-
-    # Join all parts with a comma and newline
-    new_globals_block_content = ",\n".join(output_parts)
+    formatted_parts = format_globals_recursive(globals_dict)
+    new_globals_block_content = ",\n".join(formatted_parts)
     new_globals_block = f"globals = {{\n{new_globals_block_content}\n}}"
 
     if not os.path.exists(LUACHECKRC_PATH):
@@ -257,7 +270,6 @@ def update_luacheckrc(globals_dict: dict):
         content = f.read()
     
     globals_start_index = content.find("globals = {")
-
     if globals_start_index != -1:
         print("Found existing globals table. Replacing it and anything after.")
         base_content = content[:globals_start_index]
@@ -270,7 +282,6 @@ def update_luacheckrc(globals_dict: dict):
         f.write(new_content)
     
     print("Update complete.")
-
 
 def main():
     """Main function to run the script."""
