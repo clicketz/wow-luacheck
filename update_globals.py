@@ -169,9 +169,16 @@ def update_luacheckrc(globals_list: list[str]):
     """Updates the .luacheckrc file with the provided list of globals."""
     print(f"Updating {LUACHECKRC_PATH}...")
     
-    # Format the new globals block
-    formatted_globals = ",\n    ".join(f'"{g}"' for g in globals_list)
-    new_globals_block = f"globals = {{\n    {formatted_globals}\n}}"
+    # Format the new globals block robustly to prevent trailing commas.
+    indented_globals = []
+    for g in globals_list:
+        # Escape any double quotes within the global name itself, just in case.
+        escaped_g = g.replace('"', '\\"')
+        indented_globals.append(f'    "{escaped_g}"')
+    
+    # Join with comma and newline. This is safer than using join with the comma inside.
+    formatted_globals = ",\n".join(indented_globals)
+    new_globals_block = f"globals = {{\n{formatted_globals}\n}}"
 
     if not os.path.exists(LUACHECKRC_PATH):
         print(f"{LUACHECKRC_PATH} not found. Creating a new one with default settings.")
