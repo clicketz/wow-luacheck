@@ -1,108 +1,141 @@
 #!/usr/bin/env python3
 import os
 import re
-import requests
 import json
+import requests
 
-# Constants for repo root and output files
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-OUTPUT_LUA = os.path.join(REPO_ROOT, "wow_globals.lua")
 OUTPUT_LUACHECK = os.path.join(REPO_ROOT, ".luacheckrc")
+OUTPUT_LUA = os.path.join(REPO_ROOT, "wow_globals.lua")
 OUTPUT_JSON = os.path.join(REPO_ROOT, "wow_globals.json")
 CUSTOM_GLOBALS_PATH = os.path.join(REPO_ROOT, "custom_globals.txt")
 
-# URL for GlobalStrings enUS.lua from Ketho's repo (always latest mainline)
-GLOBALSTRINGS_URL = "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/GlobalStrings/enUS.lua"
+BASE_URL = "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/"
+GLOBAL_STRINGS_URL = "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/GlobalStrings/enUS.lua"
 
-def fetch_globalstrings():
-    print(f"Downloading GlobalStrings from {GLOBALSTRINGS_URL} ...")
-    r = requests.get(GLOBALSTRINGS_URL)
+FILES_TO_PARSE = {
+    "Events.lua": "events",
+    "FrameXML.lua": "global_vars_and_functions",
+    "Frames.lua": "simple_table",
+    "GlobalAPI.lua": "global_vars_and_functions",
+    "LuaEnum.lua": "simple_table",
+    "Mixins.lua": "global_vars_and_functions",
+    "WidgetAPI.lua": "global_vars_and_functions",
+}
+
+def fetch_url(url):
+    print(f"Downloading {url} ...")
+    r = requests.get(url)
     r.raise_for_status()
     return r.text
 
+def parse_simple_table(lua_text):
+    pattern = re.compile(r'(\w+)\s*=\s*["\'].*?["\']')
+    keys = set(m.group(1) for m in pattern.finditer(lua_text))
+    return keys
+
+def parse_events(lua_text):
+    return parse_simple_table(lua_text)
+
+def parse_global_vars_and_functions(lua_text):
+    globals_dict = {}
+
+    func_pattern = re.compile(r'function\s+(\w+)\s*\(')
+    for match in func_pattern.finditer(lua_text):
+        globals_dict[match.group(1)] = None
+
+    assign_pattern = re.compile(r'^(\w+)\s*=\s*[^{}"\']', re.MULTILINE)
+    for match in assign_pattern.finditer(lua_text):
+        name = match.group(1)
+        if name not in globals_dict:
+            globals_dict[name] = None
+
+    table_pattern = re.compile(r'(\w+)\s*=\s*{([^}]*)}', re.DOTALL)
+    for match in table_pattern.finditer(lua_text):
+        global_name = match.group(1)
+        content = match.group(2)
+        field_pattern = re.compile(r'(\w+)\s*=')
+        fields = list(set(f.group(1) for f in field_pattern.finditer(content)))
+        if fields:
+            globals_dict[global_name] = {"fields": sorted(fields)}
+        else:
+            globals_dict[global_name] = None
+
+    return globals_dict
+
 def parse_globalstrings(lua_text):
     """
-    Parse global strings names from the Lua file.
-
-    Matches patterns:
-      NAME = "string"
-      _G["NAME"] = "string"
-      _G['NAME'] = 'string'
-    Extract only NAME parts.
+    Parse global strings from _G["GLOBAL_NAME"] = "some string" pattern.
+    Returns set of global names.
     """
-    globals_found = set()
-
-    # Pattern for simple assignment: NAME = "..."
-    pattern_simple = re.compile(r'^(\w+)\s*=\s*["\'].*?["\']', re.MULTILINE)
-
-    # Pattern for _G["NAME"] = "..."
-    pattern_g = re.compile(r'_G\[\s*["\']([^"\']+)["\']\s*\]\s*=\s*["\'].*?["\']')
-
-    # Find simple assignments
-    for match in pattern_simple.finditer(lua_text):
-        name = match.group(1)
-        globals_found.add(name)
-
-    # Find _G["NAME"] style assignments
-    for match in pattern_g.finditer(lua_text):
-        name = match.group(1)
-        globals_found.add(name)
-
-    return globals_found
+    pattern = re.compile(r'_G\[\s*["\']([^"\']+)["\']\s*\]\s*=')
+    return set(pattern.findall(lua_text))
 
 def read_custom_globals():
-    """
-    Read custom globals from custom_globals.txt
-
-    - Strip comments (lines starting with #)
-    - Strip whitespace
-    - Ignore empty lines
-    """
     if not os.path.isfile(CUSTOM_GLOBALS_PATH):
         print(f"No custom globals file found at {CUSTOM_GLOBALS_PATH}, skipping.")
-        return set()
+        return {}, set()
 
-    print(f"Reading custom globals from {CUSTOM_GLOBALS_PATH} ...")
-    custom_globals = set()
+    globals_dict = {}
+    simple_globals = set()
     with open(CUSTOM_GLOBALS_PATH, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            custom_globals.add(line)
-    return custom_globals
+            if '.' in line:
+                tbl, fld = line.split('.', 1)
+                if tbl not in globals_dict:
+                    globals_dict[tbl] = {"fields": set()}
+                if "fields" not in globals_dict[tbl]:
+                    globals_dict[tbl]["fields"] = set()
+                globals_dict[tbl]["fields"].add(fld)
+            else:
+                simple_globals.add(line)
+    for k in globals_dict:
+        globals_dict[k]["fields"] = sorted(globals_dict[k]["fields"])
+    return globals_dict, simple_globals
 
-def generate_lua_globals_file(globals_list):
-    """
-    Generate a Lua file defining the globals list in a Lua table.
+def merge_globals(dicts_list, simple_sets_list):
+    merged_dict = {}
+    merged_simple = set()
 
-    Format:
-    return {
-      "GLOBAL1",
-      "GLOBAL2",
-      ...
-    }
-    """
-    lines = ['return {']
-    for g in sorted(globals_list):
+    for d in dicts_list:
+        for k, v in d.items():
+            if v is None:
+                merged_simple.add(k)
+            else:
+                if k not in merged_dict:
+                    merged_dict[k] = {"fields": set()}
+                if "fields" in v:
+                    merged_dict[k]["fields"].update(v["fields"])
+
+    for s in simple_sets_list:
+        merged_simple.update(s)
+
+    for k in merged_dict:
+        merged_dict[k]["fields"] = sorted(merged_dict[k]["fields"])
+
+    merged_simple.difference_update(merged_dict.keys())
+
+    return merged_dict, merged_simple
+
+def format_luacheck_globals(globals_dict, simple_globals):
+    lines = []
+    for g in sorted(simple_globals):
         lines.append(f'    "{g}",')
-    lines.append('}')
-    return "\n".join(lines) + "\n"
 
-def generate_luacheckrc(globals_list):
-    """
-    Generate a minimal .luacheckrc snippet that marks globals as read-only.
+    for g in sorted(globals_dict.keys()):
+        lines.append(f'    {g} = {{')
+        lines.append('        fields = {')
+        for f in globals_dict[g]["fields"]:
+            lines.append(f'            "{f}",')
+        lines.append('        },')
+        lines.append('    },')
 
-    Format:
+    return "\n".join(lines)
 
-    globals = {
-      "GLOBAL1",
-      "GLOBAL2",
-      ...
-    }
-
-    Also includes your desired options like std, max_line_length, exclude_files, ignore
-    """
+def generate_luacheckrc(globals_dict, simple_globals):
     ignore_lines = [
         '    \'11./SLASH_.*\', -- Setting an undefined (Slash handler) global variable',
         '    \'11./BINDING_.*\', -- Setting an undefined (Keybinding header) global variable',
@@ -123,62 +156,95 @@ def generate_luacheckrc(globals_list):
         '    \'581\', -- Error-prone operator orders',
         '    \'582\', -- Error-prone operator orders',
     ]
-
     lines = [
         "std = 'lua51'",
         "max_line_length = false",
         "exclude_files = {'**Libs/', '**libs/'}",
-        "ignore = {"
+        "ignore = {",
     ]
     lines.extend(ignore_lines)
     lines.append("}")
     lines.append("")
     lines.append("globals = {")
-    for g in sorted(globals_list):
+    lines.append(format_luacheck_globals(globals_dict, simple_globals))
+    lines.append("}")
+    lines.append("")
+    return "\n".join(lines)
+
+def generate_lua_globals_list(globals_dict, simple_globals):
+    all_globals = set(simple_globals)
+    all_globals.update(globals_dict.keys())
+    lines = ["return {"]
+    for g in sorted(all_globals):
         lines.append(f'    "{g}",')
     lines.append("}")
     lines.append("")
-
     return "\n".join(lines)
 
-def generate_json_globals(globals_list):
-    """Generate JSON representation."""
-    return json.dumps(sorted(globals_list), indent=2)
+def generate_json_globals_list(globals_dict, simple_globals):
+    all_globals = set(simple_globals)
+    all_globals.update(globals_dict.keys())
+    return json.dumps(sorted(all_globals), indent=2)
 
 def main():
+    globals_dicts = []
+    simple_globals_sets = []
+
+    # Parse all FILES_TO_PARSE
+    for filename, parse_type in FILES_TO_PARSE.items():
+        url = BASE_URL + filename
+        try:
+            content = fetch_url(url)
+        except Exception as e:
+            print(f"Warning: failed to download {filename}: {e}")
+            continue
+
+        if parse_type == "simple_table":
+            keys = parse_simple_table(content)
+            simple_globals_sets.append(keys)
+            print(f"Parsed {len(keys)} simple globals from {filename}")
+        elif parse_type == "events":
+            keys = parse_events(content)
+            simple_globals_sets.append(keys)
+            print(f"Parsed {len(keys)} event globals from {filename}")
+        elif parse_type == "global_vars_and_functions":
+            d = parse_global_vars_and_functions(content)
+            globals_dicts.append(d)
+            print(f"Parsed {len(d)} globals with possible fields from {filename}")
+
+    # Parse GlobalStrings/enUS.lua separately
     try:
-        lua_text = fetch_globalstrings()
+        globalstrings_content = fetch_url(GLOBAL_STRINGS_URL)
+        gs_globals = parse_globalstrings(globalstrings_content)
+        simple_globals_sets.append(gs_globals)
+        print(f"Parsed {len(gs_globals)} globals from GlobalStrings/enUS.lua")
     except Exception as e:
-        print(f"ERROR: Failed to download GlobalStrings.lua: {e}")
-        return 1
+        print(f"Warning: failed to download or parse GlobalStrings/enUS.lua: {e}")
 
-    globals_set = parse_globalstrings(lua_text)
-    custom_globals = read_custom_globals()
+    # Read custom globals file
+    custom_dict, custom_simple = read_custom_globals()
+    globals_dicts.append(custom_dict)
+    simple_globals_sets.append(custom_simple)
+    print(f"Read {len(custom_simple)} custom simple globals and {len(custom_dict)} custom globals with fields")
 
-    combined_globals = globals_set.union(custom_globals)
-
-    # Write wow_globals.lua
-    lua_content = generate_lua_globals_file(combined_globals)
-    with open(OUTPUT_LUA, "w", encoding="utf-8") as f:
-        f.write(lua_content)
-    print(f"Wrote {OUTPUT_LUA} with {len(combined_globals)} globals.")
+    # Merge all globals
+    merged_dict, merged_simple = merge_globals(globals_dicts, simple_globals_sets)
+    print(f"Total globals after merge: {len(merged_simple)} simple + {len(merged_dict)} with fields")
 
     # Write .luacheckrc
-    luacheck_content = generate_luacheckrc(combined_globals)
     with open(OUTPUT_LUACHECK, "w", encoding="utf-8") as f:
-        f.write(luacheck_content)
-    print(f"Wrote {OUTPUT_LUACHECK} with {len(combined_globals)} globals.")
+        f.write(generate_luacheckrc(merged_dict, merged_simple))
+    print(f"Wrote {OUTPUT_LUACHECK}")
 
-    # Write wow_globals.json
-    json_content = generate_json_globals(combined_globals)
+    # Write wow_globals.lua
+    with open(OUTPUT_LUA, "w", encoding="utf-8") as f:
+        f.write(generate_lua_globals_list(merged_dict, merged_simple))
+    print(f"Wrote {OUTPUT_LUA}")
+
+    # Write JSON output
     with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
-        f.write(json_content)
-    print(f"Wrote {OUTPUT_JSON} with {len(combined_globals)} globals.")
-
-    # Print total count (for GitHub Actions to capture)
-    print(len(combined_globals))
-
-    return 0
+        f.write(generate_json_globals_list(merged_dict, merged_simple))
+    print(f"Wrote {OUTPUT_JSON}")
 
 if __name__ == "__main__":
-    exit(main())
+    main()
