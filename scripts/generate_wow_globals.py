@@ -34,45 +34,59 @@ def fetch_url(url):
 
 def extract_globals_from_table(table_obj):
     """
-    Recursively extract globals and fields from a Lua table parsed as Python dict or list.
-    Returns:
-      globals_dict = { global_name: {"fields": [field1, field2, ...]}, ... }
+    Recursively extract globals and their fields from a Lua table parsed as Python dict or list.
+    Returns a dict of global_name => {"fields": [...] } or None if no fields.
     """
+
     globals_dict = {}
 
-    if isinstance(table_obj, dict):
-        for k, v in table_obj.items():
-            if isinstance(v, dict):
-                fields = []
-                for subk in v.keys():
-                    if isinstance(subk, str):
-                        fields.append(subk)
-                globals_dict[k] = {"fields": sorted(fields)}
-            else:
-                globals_dict[k] = None
-
-    elif isinstance(table_obj, list):
-        # If it's a list, assume each item is a global name string or a dict
-        for item in table_obj:
-            if isinstance(item, str):
-                globals_dict[item] = None
-            elif isinstance(item, dict):
-                # Possibly dict with single key?
-                for k, v in item.items():
+    def recurse(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if isinstance(k, str):
+                    # If v is a dict, consider keys as fields
                     if isinstance(v, dict):
                         fields = []
+                        # Only include string keys as fields
                         for subk in v.keys():
                             if isinstance(subk, str):
                                 fields.append(subk)
-                        globals_dict[k] = {"fields": sorted(fields)}
+                        # Add or merge fields if global already exists
+                        if k in globals_dict:
+                            if globals_dict[k] is None:
+                                globals_dict[k] = {"fields": set()}
+                            globals_dict[k]["fields"].update(fields)
+                        else:
+                            globals_dict[k] = {"fields": set(fields)}
+                        # Also recurse into v to find nested globals
+                        recurse(v)
+                    elif isinstance(v, list):
+                        # If value is list, recurse each element
+                        recurse(v)
+                        # Register k as global with no fields (or maybe fields if list elements are strings?)
+                        if k not in globals_dict:
+                            globals_dict[k] = None
                     else:
-                        globals_dict[k] = None
-            else:
-                # unknown type, ignore
-                pass
+                        # value is not dict or list, just add global with no fields
+                        if k not in globals_dict:
+                            globals_dict[k] = None
+                # else skip non-string keys
+        elif isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, str):
+                    # A string in list can be a global
+                    if item not in globals_dict:
+                        globals_dict[item] = None
+                elif isinstance(item, dict):
+                    recurse(item)
+                # else skip
 
-    else:
-        print(f"Warning: Unexpected table_obj type: {type(table_obj)}")
+    recurse(table_obj)
+
+    # Convert field sets to sorted lists
+    for k, v in globals_dict.items():
+        if isinstance(v, dict) and "fields" in v:
+            globals_dict[k]["fields"] = sorted(v["fields"])
 
     return globals_dict
 
