@@ -181,6 +181,7 @@ def update_luacheckrc(globals_list: list[str]):
     """Updates the .luacheckrc file with the provided list of globals."""
     print(f"Updating {LUACHECKRC_PATH}...")
     
+    # Format the new globals block
     indented_globals = []
     for g in globals_list:
         escaped_g = g.replace('"', '\\"')
@@ -189,6 +190,7 @@ def update_luacheckrc(globals_list: list[str]):
     formatted_globals = ",\n".join(indented_globals)
     new_globals_block = f"globals = {{\n{formatted_globals}\n}}"
 
+    # If .luacheckrc doesn't exist, create it with the default template.
     if not os.path.exists(LUACHECKRC_PATH):
         print(f"{LUACHECKRC_PATH} not found. Creating a new one with default settings.")
         full_content = DEFAULT_LUACHECKRC_CONTENT.lstrip().format(globals_placeholder=new_globals_block)
@@ -196,15 +198,20 @@ def update_luacheckrc(globals_list: list[str]):
             f.write(full_content)
         return
 
+    # If the file exists, read its content and replace or append the globals block.
     with open(LUACHECKRC_PATH, 'r', encoding='utf-8') as f:
         content = f.read()
     
-    globals_pattern = re.compile(r"globals\s*=\s*\{.*?\}", re.DOTALL)
-    
-    if globals_pattern.search(content):
-        print("Found existing globals table. Replacing it.")
-        new_content = globals_pattern.sub(new_globals_block, content, count=1)
+    # Find the start of the globals block to truncate from there.
+    globals_start_index = content.find("globals = {")
+
+    if globals_start_index != -1:
+        # Keep everything before the globals block and discard the rest.
+        print("Found existing globals table. Replacing it and anything after.")
+        base_content = content[:globals_start_index]
+        new_content = base_content.rstrip() + '\n\n' + new_globals_block + '\n'
     else:
+        # No globals block found, just append to the end.
         print("No globals table found. Appending a new one.")
         new_content = content.rstrip() + '\n\n' + new_globals_block + '\n'
     
@@ -212,6 +219,7 @@ def update_luacheckrc(globals_list: list[str]):
         f.write(new_content)
     
     print("Update complete.")
+
 
 def main():
     """Main function to run the script."""
