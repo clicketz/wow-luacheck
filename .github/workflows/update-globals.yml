@@ -1,37 +1,51 @@
+# .github/workflows/update-globals.yml
+
 name: Update WoW Globals
 
+# Controls when the action will run.
+# It runs on a schedule and can also be triggered manually.
 on:
+  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
   schedule:
-    - cron: '0 19 * * 2' # Tuesdays at 12:00 PM PST (19:00 UTC)
-  workflow_dispatch:
+    # Runs at 20:00 UTC on Tuesday (12:00 PM PST / 1:00 PM PDT)
+    - cron: '0 20 * * 2'
 
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
+  # This job fetches the globals and updates the .luacheckrc file
   update-globals:
     runs-on: ubuntu-latest
+    # Grant permissions for the workflow to read repository contents and write commits
+    permissions:
+      contents: write
+
     steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
+      # 1. Check out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - name: Check out repository
+        uses: actions/checkout@v4
 
+      # 2. Set up Python, which we'll use to run our script
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.10'
 
-      - name: Install requirements
-        run: pip install slpp
-
-      - name: Run globals generator script
-        run: python scripts/generate_wow_globals.py
-
-      - name: Check for changes
+      # 3. Install dependencies required by the Python script
+      - name: Install Python dependencies
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .luacheckrc wow_globals.lua wow_globals.json prev_globals.txt commit_message.txt
-          if git diff --cached --quiet; then
-            echo "No changes detected."
-            exit 0
-          fi
-          git commit -F commit_message.txt
-          git push origin HEAD:main
+          python -m pip install --upgrade pip
+          pip install requests
+
+      # 4. Run the Python script to fetch, parse, and update the .luacheckrc file
+      - name: Fetch and update globals
+        run: python update_globals.py
+
+      # 5. Commit the changes to .luacheckrc and custom_globals.lua if there are any
+      - name: Commit and push if changed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(globals): Update WoW globals"
+          file_pattern: .luacheckrc custom_globals.lua
+          commit_user_name: "GitHub Actions Bot"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
+          commit_author: "GitHub Actions Bot <github-actions[bot]@users.noreply.github.com>"
