@@ -34,78 +34,50 @@ def fetch_url(url):
 
 def extract_globals_from_table(table_obj):
     """
-    Recursively extract globals and their fields from a Lua table parsed as Python dict or list.
-    Returns a dict of global_name => {"fields": [...] } or None if no fields.
+    Extract globals from Lua table parsed into Python.
+    Handles dict or list of strings.
+    Returns dict: global_name -> {"fields": [...] } or None.
     """
-
     globals_dict = {}
 
-    def recurse(obj):
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                if isinstance(k, str):
-                    # If v is a dict, consider keys as fields
-                    if isinstance(v, dict):
-                        fields = []
-                        # Only include string keys as fields
-                        for subk in v.keys():
-                            if isinstance(subk, str):
-                                fields.append(subk)
-                        # Add or merge fields if global already exists
-                        if k in globals_dict:
-                            if globals_dict[k] is None:
-                                globals_dict[k] = {"fields": set()}
-                            globals_dict[k]["fields"].update(fields)
-                        else:
-                            globals_dict[k] = {"fields": set(fields)}
-                        # Also recurse into v to find nested globals
-                        recurse(v)
-                    elif isinstance(v, list):
-                        # If value is list, recurse each element
-                        recurse(v)
-                        # Register k as global with no fields (or maybe fields if list elements are strings?)
-                        if k not in globals_dict:
-                            globals_dict[k] = None
-                    else:
-                        # value is not dict or list, just add global with no fields
-                        if k not in globals_dict:
-                            globals_dict[k] = None
-                # else skip non-string keys
-        elif isinstance(obj, list):
-            for item in obj:
-                if isinstance(item, str):
-                    # A string in list can be a global
-                    if item not in globals_dict:
-                        globals_dict[item] = None
-                elif isinstance(item, dict):
-                    recurse(item)
-                # else skip
+    if isinstance(table_obj, dict):
+        for k, v in table_obj.items():
+            if isinstance(v, dict):
+                fields = []
+                for subk in v.keys():
+                    if isinstance(subk, str):
+                        fields.append(subk)
+                globals_dict[k] = {"fields": sorted(fields)}
+            else:
+                globals_dict[k] = None
 
-    recurse(table_obj)
-
-    # Convert field sets to sorted lists
-    for k, v in globals_dict.items():
-        if isinstance(v, dict) and "fields" in v:
-            globals_dict[k]["fields"] = sorted(v["fields"])
+    elif isinstance(table_obj, list):
+        # list of globals (strings)
+        for item in table_obj:
+            if isinstance(item, str):
+                globals_dict[item] = None
+            elif isinstance(item, dict):
+                # rare case, but handle recursively if needed
+                subglobals = extract_globals_from_table(item)
+                globals_dict.update(subglobals)
+    else:
+        print(f"Warning: Unexpected table type: {type(table_obj)}")
 
     return globals_dict
 
 def parse_lua_table_file(content):
     """
-    Find first big Lua table in file content and parse with slpp.
-    Returns dict of globals extracted.
+    Parse the first Lua table found in content using slpp.
+    Return globals dict.
     """
-    import re
-
-    # Try to find first "= {...}" assignment block
     pattern = re.compile(r'=\s*({.*})', re.DOTALL)
     match = pattern.search(content)
     if not match:
-        # fallback: try to find standalone table literal
+        # fallback try entire content as table
         pattern2 = re.compile(r'({.*})', re.DOTALL)
         match2 = pattern2.search(content)
         if not match2:
-            print("No table literal found for parsing.")
+            print("No Lua table found to parse.")
             return {}
         table_str = match2.group(1)
     else:
@@ -114,8 +86,6 @@ def parse_lua_table_file(content):
     # Remove Lua comments
     table_str = re.sub(r'--\[\[.*?\]\]', '', table_str, flags=re.DOTALL)
     table_str = re.sub(r'--.*', '', table_str)
-
-    # slpp expects well-formed Lua table, so remove trailing commas & whitespace if needed
 
     try:
         table_obj = lua.decode(table_str)
@@ -127,8 +97,7 @@ def parse_lua_table_file(content):
 
 def parse_globalstrings(lua_text):
     """
-    Parse global strings from _G["GLOBAL_NAME"] = "some string" pattern.
-    Returns set of global names.
+    Extract globals from _G["NAME"] = ... pattern in globalstrings lua.
     """
     pattern = re.compile(r'_G\[\s*["\']([^"\']+)["\']\s*\]\s*=')
     return set(pattern.findall(lua_text))
@@ -149,8 +118,6 @@ def read_custom_globals():
                 tbl, fld = line.split('.', 1)
                 if tbl not in globals_dict:
                     globals_dict[tbl] = {"fields": set()}
-                if "fields" not in globals_dict[tbl]:
-                    globals_dict[tbl]["fields"] = set()
                 globals_dict[tbl]["fields"].add(fld)
             else:
                 simple_globals.add(line)
@@ -169,8 +136,7 @@ def merge_globals(dicts_list, simple_sets_list):
             else:
                 if k not in merged_dict:
                     merged_dict[k] = {"fields": set()}
-                if "fields" in v:
-                    merged_dict[k]["fields"].update(v["fields"])
+                merged_dict[k]["fields"].update(v["fields"])
 
     for s in simple_sets_list:
         merged_simple.update(s)
@@ -276,7 +242,6 @@ def main():
             globals_dicts.append(globals_dict)
             print(f"Parsed {len(globals_dict)} globals from {filename}")
 
-    # Parse GlobalStrings/enUS.lua separately for string globals
     try:
         globalstrings_content = fetch_url(GLOBAL_STRINGS_URL)
         gs_globals = parse_globalstrings(globalstrings_content)
@@ -285,17 +250,14 @@ def main():
     except Exception as e:
         print(f"Warning: failed to download or parse GlobalStrings/enUS.lua: {e}")
 
-    # Read custom globals
     custom_dict, custom_simple = read_custom_globals()
     globals_dicts.append(custom_dict)
     simple_globals_sets.append(custom_simple)
     print(f"Read {len(custom_simple)} custom simple globals and {len(custom_dict)} custom globals with fields")
 
-    # Merge all globals
     merged_dict, merged_simple = merge_globals(globals_dicts, simple_globals_sets)
     print(f"Total globals after merge: {len(merged_simple)} simple + {len(merged_dict)} with fields")
 
-    # Compare with previous run to track additions/removals
     merged_all = set(merged_simple) | set(merged_dict.keys())
     prev_globals = load_prev_globals()
 
@@ -304,12 +266,10 @@ def main():
 
     write_commit_message(added, removed)
 
-    # Save current globals for next run
     with open(PREV_GLOBALS_PATH, "w", encoding="utf-8") as f:
         for g in sorted(merged_all):
             f.write(g + "\n")
 
-    # Write outputs
     with open(OUTPUT_LUACHECK, "w", encoding="utf-8") as f:
         f.write(generate_luacheckrc(merged_dict, merged_simple))
     print(f"Wrote {OUTPUT_LUACHECK}")
