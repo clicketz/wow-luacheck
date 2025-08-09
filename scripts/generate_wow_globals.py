@@ -32,25 +32,47 @@ def fetch_url(url):
     r.raise_for_status()
     return r.text
 
-def extract_globals_from_table(table_dict):
+def extract_globals_from_table(table_obj):
     """
-    Recursively extract globals and fields from a Lua table parsed as Python dict.
+    Recursively extract globals and fields from a Lua table parsed as Python dict or list.
     Returns:
       globals_dict = { global_name: {"fields": [field1, field2, ...]}, ... }
     """
     globals_dict = {}
 
-    for k, v in table_dict.items():
-        if isinstance(v, dict):
-            # Nested table: treat as global with fields
-            fields = []
-            for subk in v.keys():
-                if isinstance(subk, str):
-                    fields.append(subk)
-            globals_dict[k] = {"fields": sorted(fields)}
-        else:
-            # Simple global key with non-table value
-            globals_dict[k] = None
+    if isinstance(table_obj, dict):
+        for k, v in table_obj.items():
+            if isinstance(v, dict):
+                fields = []
+                for subk in v.keys():
+                    if isinstance(subk, str):
+                        fields.append(subk)
+                globals_dict[k] = {"fields": sorted(fields)}
+            else:
+                globals_dict[k] = None
+
+    elif isinstance(table_obj, list):
+        # If it's a list, assume each item is a global name string or a dict
+        for item in table_obj:
+            if isinstance(item, str):
+                globals_dict[item] = None
+            elif isinstance(item, dict):
+                # Possibly dict with single key?
+                for k, v in item.items():
+                    if isinstance(v, dict):
+                        fields = []
+                        for subk in v.keys():
+                            if isinstance(subk, str):
+                                fields.append(subk)
+                        globals_dict[k] = {"fields": sorted(fields)}
+                    else:
+                        globals_dict[k] = None
+            else:
+                # unknown type, ignore
+                pass
+
+    else:
+        print(f"Warning: Unexpected table_obj type: {type(table_obj)}")
 
     return globals_dict
 
@@ -79,16 +101,15 @@ def parse_lua_table_file(content):
     table_str = re.sub(r'--\[\[.*?\]\]', '', table_str, flags=re.DOTALL)
     table_str = re.sub(r'--.*', '', table_str)
 
-    # slpp expects well-formed Lua table, so remove trailing commas & whitespace
-    # (You can add more cleaning if needed)
+    # slpp expects well-formed Lua table, so remove trailing commas & whitespace if needed
 
     try:
-        table_dict = lua.decode(table_str)
+        table_obj = lua.decode(table_str)
     except Exception as e:
         print(f"Failed to parse Lua table: {e}")
         return {}
 
-    return extract_globals_from_table(table_dict)
+    return extract_globals_from_table(table_obj)
 
 def parse_globalstrings(lua_text):
     """
