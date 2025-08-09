@@ -1,3 +1,17 @@
+#!/usr/bin/env python3
+"""
+generate_wow_globals.py
+
+Generates .luacheckrc containing:
+ - WoW API globals (scraped from warcraft.wiki.gg)
+ - FrameXML globals (parsed from Gethe's wow-ui-source zip, .lua files)
+ - FrameXML XML names (parsed from .xml files; filtered)
+ - GlobalStrings from Ketho's enUS.lua (handles NAME = ... and _G["NAME"] = ...)
+ - custom globals from custom_globals.txt (one-per-line, '#' comments allowed)
+
+Writes .luacheckrc in repo root (one level above this script).
+"""
+from __future__ import annotations
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -5,38 +19,47 @@ import os
 import sys
 import tempfile
 import zipfile
+import xml.etree.ElementTree as ET
 
 API_WIKI_URL = "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"
 FRAMEXML_ZIP_URL = "https://github.com/Gethe/wow-ui-source/archive/refs/heads/live.zip"
+KETHO_GLOBALSTRINGS_RAW = "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/GlobalStrings/enUS.lua"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 OUTPUT_FILE = os.path.join(REPO_ROOT, ".luacheckrc")
+CUSTOM_GLOBALS_PATH = os.path.join(REPO_ROOT, "custom_globals.txt")
 
+# Patterns used for parsing .lua files
 PATTERNS = [
-    re.compile(r"^\s*(\w+)\s*="),
-    re.compile(r"^\s*_G\[['\"](\w+)['\"]\]\s*="),
-    re.compile(r"^\s*_G\.(\w+)\s*="),
-    re.compile(r"^\s*function\s+(\w+)\s*\("),
+    re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*="),     # NAME = ...
+    re.compile(r"^\s*_G\[['\"]([A-Za-z0-9_]+)['\"]\]\s*="), # _G["NAME"] = ...
+    re.compile(r"^\s*_G\.([A-Za-z_][A-Za-z0-9_]*)\s*="), # _G.NAME = ...
+    re.compile(r"^\s*function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\("), # function NAME(
 ]
 
-def fetch_api_globals():
+# Filter for XML-extracted names: only letters, digits, underscores (allow leading digits).
+XML_NAME_ALLOWED = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def fetch_api_globals() -> set[str]:
     print("Fetching WoW API globals from warcraft.wiki.gg...")
-    resp = requests.get(API_WIKI_URL)
+    resp = requests.get(API_WIKI_URL, timeout=30)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    globals_found = set()
+    globals_found: set[str] = set()
     for a in soup.select('a[href^="/wiki/API_"]'):
         name = a.text.strip()
         if name:
             globals_found.add(name)
-    print(f"Found {len(globals_found)} API globals.")
+    print(f"  Found {len(globals_found)} API globals.")
     return globals_found
 
-def download_and_extract_framexml():
-    print("Downloading FrameXML source zip from GitHub...")
-    resp = requests.get(FRAMEXML_ZIP_URL)
+
+def download_and_extract_framexml() -> tempfile.TemporaryDirectory:
+    print("Downloading FrameXML source zip from Gethe's repo...")
+    resp = requests.get(FRAMEXML_ZIP_URL, timeout=60)
     resp.raise_for_status()
 
     tmpdir = tempfile.TemporaryDirectory()
@@ -48,73 +71,116 @@ def download_and_extract_framexml():
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
         zip_ref.extractall(tmpdir.name)
 
-    return tmpdir  # caller must cleanup with tmpdir.cleanup()
+    # Optional: print top-level entries for debugging
+    # print("Extracted top-level:", os.listdir(tmpdir.name))
+    return tmpdir
 
-def parse_framexml_globals(extracted_path):
-    print("Parsing FrameXML globals...")
-    globals_set = set()
+
+def parse_framexml_lua_globals(extracted_path: str) -> set[str]:
+    print("Parsing FrameXML .lua files for globals...")
+    globals_set: set[str] = set()
     for root, _, files in os.walk(extracted_path):
         for fname in files:
-            if fname.endswith(".lua"):
-                fpath = os.path.join(root, fname)
-                try:
-                    with open(fpath, encoding="utf-8", errors="ignore") as fh:
-                        for line in fh:
-                            for pattern in PATTERNS:
-                                m = pattern.match(line)
-                                if m:
-                                    globals_set.add(m.group(1))
-                except Exception as e:
-                    print(f"Warning: Skipping {fpath} due to error: {e}")
-    print(f"Found {len(globals_set)} FrameXML globals.")
+            if not fname.endswith(".lua"):
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        for pattern in PATTERNS:
+                            m = pattern.match(line)
+                            if m:
+                                globals_set.add(m.group(1))
+            except Exception as e:
+                print(f"  Warning: Skipping {fpath} due to error: {e}")
+    print(f"  Found {len(globals_set)} globals from .lua files.")
     return globals_set
 
-def fetch_globalstrings_globals_ketho():
-    print("Fetching enUS.lua global strings from Ketho's BlizzardInterfaceResources repo...")
-    url = "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/GlobalStrings/enUS.lua"
-    resp = requests.get(url)
+
+def parse_framexml_xml_names(extracted_path: str) -> set[str]:
+    """
+    Stream-parse FrameXML .xml files and collect 'name' attribute values.
+    Filter names to only letters/digits/underscore (allows numeric-leading names).
+    """
+    print("Parsing FrameXML .xml files for named UI objects...")
+    names: set[str] = set()
+    xml_count = 0
+    matched = 0
+
+    for root, _, files in os.walk(extracted_path):
+        for fname in files:
+            if not fname.endswith(".xml"):
+                continue
+            fpath = os.path.join(root, fname)
+            xml_count += 1
+            try:
+                # Use iterparse to keep memory low
+                for event, elem in ET.iterparse(fpath, events=("start",)):
+                    name_attr = elem.get("name")
+                    if name_attr:
+                        name_attr = name_attr.strip()
+                        if XML_NAME_ALLOWED.match(name_attr):
+                            names.add(name_attr)
+                            matched += 1
+                    # clear element to free memory
+                    elem.clear()
+            except ET.ParseError:
+                # Some XML files may contain constructs ElementTree dislikes; skip them
+                print(f"  Warning: XML parse error in {fpath}, skipping.")
+            except Exception as e:
+                print(f"  Warning: Could not read {fpath}: {e}")
+
+    print(f"  Scanned {xml_count} XML files, matched {len(names)} valid names (total matches {matched}).")
+    return names
+
+
+def fetch_globalstrings_globals_ketho() -> set[str]:
+    print("Fetching enUS.lua global strings from Ketho's repo...")
+    resp = requests.get(KETHO_GLOBALSTRINGS_RAW, timeout=30)
     resp.raise_for_status()
 
-    globals_set = set()
-    pattern1 = re.compile(r"^\s*(\w+)\s*=")                     # e.g. NAME = "..."
-    pattern2 = re.compile(r'^\s*_G\["([^"]+)"\]\s*=')          # e.g. _G["NAME"] = "..."
-
+    globals_set: set[str] = set()
+    # Patterns: NAME = ...   and   _G["NAME"] = ...
+    p_simple = re.compile(r"^\s*([A-Za-z0-9_]+)\s*=")
+    p_g = re.compile(r'^\s*_G\["([^"]+)"\]\s*=')
     for line in resp.text.splitlines():
-        m1 = pattern1.match(line)
+        m1 = p_simple.match(line)
         if m1:
             globals_set.add(m1.group(1))
             continue
-
-        m2 = pattern2.match(line)
+        m2 = p_g.match(line)
         if m2:
-            globals_set.add(m2.group(1))
-
-    print(f"Found {len(globals_set)} globals in enUS.lua")
+            # only accept simple names (letters/digits/underscore)
+            name = m2.group(1).strip()
+            if XML_NAME_ALLOWED.match(name):
+                globals_set.add(name)
+    print(f"  Found {len(globals_set)} globals in enUS.lua.")
     return globals_set
 
-def read_custom_globals():
-    custom_globals_path = os.path.join(REPO_ROOT, "custom_globals.txt")
-    if not os.path.exists(custom_globals_path):
-        print(f"No custom globals file found at {custom_globals_path}, skipping.")
+
+def read_custom_globals() -> set[str]:
+    if not os.path.exists(CUSTOM_GLOBALS_PATH):
+        print("No custom_globals.txt found; skipping.")
         return set()
-    globals_set = set()
-    with open(custom_globals_path, "r", encoding="utf-8") as f:
+    globals_set: set[str] = set()
+    with open(CUSTOM_GLOBALS_PATH, "r", encoding="utf-8") as f:
         for line in f:
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue  # skip blank lines and comments
-            globals_set.add(stripped)
-    print(f"Loaded {len(globals_set)} custom globals from {custom_globals_path}.")
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            globals_set.add(s)
+    print(f"  Loaded {len(globals_set)} custom globals from custom_globals.txt.")
     return globals_set
 
-def generate_luacheckrc_content(globals_list):
+
+def generate_luacheckrc_content(globals_list: set[str]) -> str:
     sorted_globals = sorted(globals_list)
-    lines = [
+    lines: list[str] = [
         "std = 'lua51'",
         "max_line_length = false",
         "exclude_files = {'**Libs/', '**libs/'}",
         "",
-        "globals = {"
+        "globals = {",
     ]
     for name in sorted_globals:
         lines.append(f"    '{name}',")
@@ -141,39 +207,64 @@ def generate_luacheckrc_content(globals_list):
         '581',  # Error-prone operator orders
         '582',  # Error-prone operator orders
     ]
-    for pattern in ignore_patterns:
-        lines.append(f"    '{pattern}',")
+    for p in ignore_patterns:
+        lines.append(f"    '{p}',")
     lines.append("}")
     lines.append("")
     return "\n".join(lines)
 
-def main():
-    api_globals = fetch_api_globals()
 
-    tmpdir = download_and_extract_framexml()
+def main() -> None:
     try:
-        framexml_globals = parse_framexml_globals(tmpdir.name)
-    finally:
-        tmpdir.cleanup()
+        api_globals = fetch_api_globals()
+    except Exception as e:
+        print(f"Error fetching API globals: {e}")
+        api_globals = set()
 
-    globalstrings_globals = fetch_globalstrings_globals_ketho()
+    # Download & extract FrameXML once
+    tmpdir = None
+    try:
+        tmpdir = download_and_extract_framexml()
+        extracted_path = tmpdir.name
+        lua_framexml_globals = parse_framexml_lua_globals(extracted_path)
+        xml_names = parse_framexml_xml_names(extracted_path)
+    except Exception as e:
+        print(f"Error handling FrameXML zip: {e}")
+        lua_framexml_globals = set()
+        xml_names = set()
+    finally:
+        if tmpdir:
+            tmpdir.cleanup()
+
+    try:
+        globalstrings_globals = fetch_globalstrings_globals_ketho()
+    except Exception as e:
+        print(f"Error fetching Ketho GlobalStrings: {e}")
+        globalstrings_globals = set()
 
     custom_globals = read_custom_globals()
-    all_globals = api_globals | framexml_globals | globalstrings_globals | custom_globals
+
+    # Merge all
+    all_globals = api_globals | lua_framexml_globals | xml_names | globalstrings_globals | custom_globals
+
     new_content = generate_luacheckrc_content(all_globals)
 
+    # Write only if changed
     if os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
-            current_content = f.read()
-        if current_content == new_content:
+            current = f.read()
+        if current == new_content:
             print("No changes to .luacheckrc. Exiting.")
+            # print count for GitHub Actions if desired
+            print(len(all_globals))
             sys.exit(0)
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(new_content)
 
     print(f"Wrote {len(all_globals)} globals to {OUTPUT_FILE}.")
-    print(len(all_globals))  # For GitHub Actions output parsing
+    print(len(all_globals))  # last line useful for GH Actions parsing
+
 
 if __name__ == "__main__":
     main()
