@@ -26,17 +26,69 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pip && pip install requests beautifulsoup4
 
-      - name: Run globals update script
-        run: python scripts/generate_wow_globals.py
+      - name: Save previous wow_globals.lua names
+        id: save_prev
+        run: |
+          # Extract quoted names from current wow_globals.lua (if present)
+          if [ -f wow_globals.lua ]; then
+            awk -F'"' '/^\s*"/ {print $2}' wow_globals.lua | sort -u > prev_globals.txt
+          else
+            # no previous file -> empty list
+            : > prev_globals.txt
+          fi
+          echo "prev_count=$(wc -l < prev_globals.txt || true)"
+          echo "prev_saved=true" >> $GITHUB_OUTPUT
 
-      - name: Commit and push changes if any
+      - name: Run globals generator
+        id: gen
+        run: |
+          # Run the generator; it will overwrite wow_globals.lua if changed.
+          python scripts/generate_wow_globals.py
+
+      - name: Build new globallist
+        id: build_new
+        run: |
+          if [ -f wow_globals.lua ]; then
+            awk -F'"' '/^\s*"/ {print $2}' wow_globals.lua | sort -u > new_globals.txt
+          else
+            : > new_globals.txt
+          fi
+          echo "new_count=$(wc -l < new_globals.txt || true)"
+          echo "new_built=true" >> $GITHUB_OUTPUT
+
+      - name: Compute added and removed counts
+        id: diff
+        run: |
+          # Ensure files exist
+          [ -f prev_globals.txt ] || : > prev_globals.txt
+          [ -f new_globals.txt ] || : > new_globals.txt
+
+          # comm requires sorted files; we created sorted files already.
+          added=$(comm -13 prev_globals.txt new_globals.txt | wc -l | tr -d ' ')
+          removed=$(comm -23 prev_globals.txt new_globals.txt | wc -l | tr -d ' ')
+          # ensure numbers are integers
+          added=${added:-0}
+          removed=${removed:-0}
+          echo "added_count=$added" >> $GITHUB_OUTPUT
+          echo "removed_count=$removed" >> $GITHUB_OUTPUT
+          echo "Added: $added, Removed: $removed"
+
+      - name: Commit and push if changed (message shows +added -removed)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Stage outputs
           git add .luacheckrc wow_globals.lua wow_globals.json
+          # If no staged changes, exit
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
           fi
-          git commit -m "chore: update WoW globals list (auto)"
+          added=${{ steps.diff.outputs.added_count }}
+          removed=${{ steps.diff.outputs.removed_count }}
+          # Fallback to zero if empty
+          added=${added:-0}
+          removed=${removed:-0}
+          # Compact commit message
+          git commit -m "chore: update WoW globals list (+${added} -${removed})"
           git push
