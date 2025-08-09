@@ -1,106 +1,41 @@
-name: Update WoW Globals Luacheck
+name: Update WoW Globals List
 
 on:
   schedule:
-    - cron: '0 20 * * 2'  # Tuesday 12:00 PM PST (20:00 UTC)
-  workflow_dispatch:
-
-permissions:
-  contents: write
+    # Runs every Tuesday at 12:00 PM PST (20:00 UTC)
+    - cron: '0 20 * * 2'
+  push:
+    branches:
+      - main
 
 jobs:
-  update-luacheck:
+  update-globals:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Python 3.x
+        uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
-      - name: Install dependencies
-        run: pip install --upgrade pip && pip install requests beautifulsoup4
+      - name: Install requests library
+        run: python -m pip install --upgrade pip requests
 
-      - name: Prepare temp directory for globals lists
-        id: prep_tmp
-        run: |
-          TMP_DIR=$(mktemp -d)
-          echo "tmp_dir=$TMP_DIR" >> $GITHUB_OUTPUT
-
-      - name: Save previous wow_globals.lua names (temp)
-        id: save_prev
-        run: |
-          if [ -f wow_globals.lua ]; then
-            awk -F'"' '/^\s*"/ {print $2}' wow_globals.lua | sort -u > ${{ steps.prep_tmp.outputs.tmp_dir }}/prev_globals.txt
-          else
-            : > ${{ steps.prep_tmp.outputs.tmp_dir }}/prev_globals.txt
-          fi
-          echo "Saved previous globals (count: $(wc -l < ${{ steps.prep_tmp.outputs.tmp_dir }}/prev_globals.txt))"
-
-      - name: Run globals generator
-        id: gen
+      - name: Run WoW globals generation script
         run: python scripts/generate_wow_globals.py
 
-      - name: Debug - list repo root files
-        run: |
-          echo "Repository root listing:"
-          ls -la
-
-      - name: Build new globallist (temp)
-        id: build_new
-        run: |
-          if [ -f wow_globals.lua ]; then
-            awk -F'"' '/^\s*"/ {print $2}' wow_globals.lua | sort -u > ${{ steps.prep_tmp.outputs.tmp_dir }}/new_globals.txt
-          else
-            : > ${{ steps.prep_tmp.outputs.tmp_dir }}/new_globals.txt
-          fi
-          echo "Built new globals list (count: $(wc -l < ${{ steps.prep_tmp.outputs.tmp_dir }}/new_globals.txt))"
-
-      - name: Compute added and removed counts
-        id: diff
-        run: |
-          TMP_DIR=${{ steps.prep_tmp.outputs.tmp_dir }}
-          added=$(comm -13 "$TMP_DIR/prev_globals.txt" "$TMP_DIR/new_globals.txt" | wc -l | tr -d ' ')
-          removed=$(comm -23 "$TMP_DIR/prev_globals.txt" "$TMP_DIR/new_globals.txt" | wc -l | tr -d ' ')
-          added=${added:-0}
-          removed=${removed:-0}
-          echo "added_count=$added" >> $GITHUB_OUTPUT
-          echo "removed_count=$removed" >> $GITHUB_OUTPUT
-          echo "Added: $added, Removed: $removed"
-
-      - name: Commit and push if changed (message shows +added -removed)
+      - name: Check for changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          files_to_add=""
-          for f in .luacheckrc wow_globals.lua wow_globals.json; do
-            if [ -f "$f" ]; then
-              files_to_add="$files_to_add $f"
-            fi
-          done
-
-          if [ -z "$files_to_add" ]; then
-            echo "No output files present to add. Nothing to commit."
-            exit 0
-          fi
-
-          git add $files_to_add
-
+          git add .luacheckrc wow_globals.lua wow_globals.json
           if git diff --cached --quiet; then
-            echo "No changes to commit."
+            echo "No changes to commit"
             exit 0
           fi
-
-          added=${{ steps.diff.outputs.added_count }}
-          removed=${{ steps.diff.outputs.removed_count }}
-          added=${added:-0}
-          removed=${removed:-0}
-
-          git commit -m "chore: update WoW globals list (+${added} -${removed})"
+          git commit -m "chore: update WoW globals list (#${{ github.run_number }})"
           git push
