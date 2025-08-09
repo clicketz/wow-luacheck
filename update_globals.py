@@ -9,7 +9,7 @@ from collections import defaultdict
 RESOURCE_FILES = {
     "FrameXML": {
         "url": "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/FrameXML.lua",
-        "parser": "parse_simple_globals"
+        "parser": "parse_framemxml_globals"
     },
     "GlobalStrings": {
         "url": "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/GlobalStrings/enUS.lua",
@@ -93,22 +93,31 @@ def parse_global_assignments(content: str) -> dict:
             globals_map[match.group(1)] = True
     return globals_map
 
-def parse_simple_globals(content: str) -> dict:
-    """Parses files with simple function definitions and variable assignments."""
-    globals_map = {}
-    # Matches: function MyFunction(...)
-    func_pattern = re.compile(r"^\s*function\s+([A-Za-z0-9_:]+)")
-    # Matches: MyGlobal = ...
-    var_pattern = re.compile(r"^\s*([A-Z][A-Za-z0-9_]+)\s*=")
-    for line in content.splitlines():
-        func_match = func_pattern.match(line)
-        if func_match:
-            globals_map[func_match.group(1).split(':')[0]] = True
-            continue
-        var_match = var_pattern.match(line)
-        if var_match:
-            globals_map[var_match.group(1)] = True
-    return globals_map
+def parse_framemxml_globals(content: str) -> dict:
+    """Parses FrameXML.lua for simple functions, tables, and table methods."""
+    globals_map = defaultdict(lambda: {'fields': set()})
+    simple_globals = set()
+    
+    # Pattern for strings inside the local FrameXML and LoadOnDemand tables
+    string_pattern = re.compile(r"['\"]([^'\"]+)['\"]")
+    
+    # Find the FrameXML and LoadOnDemand tables and extract their string contents
+    table_pattern = re.compile(r"^\s*local\s+(?:FrameXML|LoadOnDemand)\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
+    for table_match in table_pattern.finditer(content):
+        table_content = table_match.group(1)
+        for string_match in string_pattern.finditer(table_content):
+            full_name = string_match.group(1)
+            if "." in full_name:
+                parent, field = full_name.split(".", 1)
+                globals_map[parent]['fields'].add(field)
+            else:
+                simple_globals.add(full_name)
+
+    for s in simple_globals:
+        if s not in globals_map:
+            globals_map[s] = True
+
+    return {k: ({'fields': sorted(list(v['fields']))} if isinstance(v, dict) else v) for k, v in globals_map.items()}
 
 def parse_api_definitions(content: str) -> dict:
     """Parses complex API files by finding C_TableName assignments and their fields."""
@@ -138,10 +147,9 @@ def parse_api_definitions(content: str) -> dict:
 
     return {k: ({'fields': sorted(list(v['fields']))} if isinstance(v, dict) else v) for k, v in globals_map.items()}
 
-
 def parse_enum_definitions(content: str) -> dict:
     """Parses LuaEnum files for Enum tables and LE_ constants."""
-    globals_map = defaultdict(lambda: defaultdict(set))
+    globals_map = defaultdict(lambda: defaultdict(lambda: {'fields': set()}))
     simple_globals = set()
 
     # 1. LE_ and NUM_LE_ constants
@@ -150,7 +158,7 @@ def parse_enum_definitions(content: str) -> dict:
 
     # 2. Top-level tables (Enum, Constants) and their direct children
     table_block_pattern = re.compile(r"^\s*(Enum|Constants)\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
-    sub_table_pattern = re.compile(r"^\s*([A-Z][A-Za-z0-9_]+)\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
+    sub_table_pattern = re.compile(r"\s*([A-Z][A-Za-z0-9_]+)\s*=\s*\{(.*?)\}", re.DOTALL)
     field_pattern = re.compile(r"^\s*([A-Z][A-Za-z0-9_]+)\s*=", re.MULTILINE)
 
     for block_match in table_block_pattern.finditer(content):
@@ -158,7 +166,7 @@ def parse_enum_definitions(content: str) -> dict:
         for sub_table_match in sub_table_pattern.finditer(table_content):
             sub_table_name, sub_table_content = sub_table_match.groups()
             for field_match in field_pattern.finditer(sub_table_content):
-                globals_map[parent_table][sub_table_name].add(field_match.group(1))
+                globals_map[parent_table][sub_table_name]['fields'].add(field_match.group(1))
 
     for s in simple_globals:
         globals_map[s] = True
@@ -167,18 +175,17 @@ def parse_enum_definitions(content: str) -> dict:
     final_map = {}
     for k, v in globals_map.items():
         if isinstance(v, defaultdict):
-            final_map[k] = {sub_k: sorted(list(sub_v)) for sub_k, sub_v in v.items()}
+            final_map[k] = {sub_k: {'fields': sorted(list(sub_v['fields']))} for sub_k, sub_v in v.items()}
         else:
             final_map[k] = v
     return final_map
-
 
 # --- Main Logic ---
 
 def merge_globals(d1, d2):
     """Recursively merges two dictionaries of globals."""
     for k, v in d2.items():
-        if k in d1 and isinstance(d1[k], dict) and isinstance(v, dict):
+        if k in d1 and isinstance(d1.get(k), dict) and isinstance(v, dict):
             merge_globals(d1[k], v)
         else:
             d1[k] = v
@@ -192,7 +199,7 @@ def fetch_and_parse_all() -> dict:
         "parse_global_assignments": parse_global_assignments,
         "parse_api_definitions": parse_api_definitions,
         "parse_enum_definitions": parse_enum_definitions,
-        "parse_simple_globals": parse_simple_globals,
+        "parse_framemxml_globals": parse_framemxml_globals,
     }
 
     for name, info in RESOURCE_FILES.items():
@@ -282,6 +289,7 @@ def update_luacheckrc(globals_dict: dict):
         f.write(new_content)
     
     print("Update complete.")
+
 
 def main():
     """Main function to run the script."""
