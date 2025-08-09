@@ -7,7 +7,6 @@ import sys
 API_WIKI_URL = "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"
 FRAMEXML_ZIP_URL = "https://github.com/Gethe/wow-ui-source/archive/refs/heads/live.zip"
 
-# Calculate repo root and .luacheckrc output file path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 OUTPUT_FILE = os.path.join(REPO_ROOT, ".luacheckrc")
@@ -68,6 +67,21 @@ def fetch_framexml_globals():
     print(f"Found {len(globals_set)} FrameXML globals.")
     return globals_set
 
+def read_custom_globals():
+    custom_globals_path = os.path.join(REPO_ROOT, "custom_globals.txt")
+    if not os.path.exists(custom_globals_path):
+        print(f"No custom globals file found at {custom_globals_path}, skipping.")
+        return set()
+    globals_set = set()
+    with open(custom_globals_path, "r", encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue  # skip blank lines and comments
+            globals_set.add(stripped)
+    print(f"Loaded {len(globals_set)} custom globals from {custom_globals_path}.")
+    return globals_set
+
 def generate_luacheckrc_content(globals_list):
     sorted_globals = sorted(globals_list)
     lines = [
@@ -83,7 +97,8 @@ def generate_luacheckrc_content(globals_list):
 def main():
     api_globals = fetch_api_globals()
     framexml_globals = fetch_framexml_globals()
-    all_globals = api_globals | framexml_globals
+    custom_globals = read_custom_globals()
+    all_globals = api_globals | framexml_globals | custom_globals
     new_content = generate_luacheckrc_content(all_globals)
 
     if os.path.exists(OUTPUT_FILE):
