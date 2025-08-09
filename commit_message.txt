@@ -1,1 +1,1 @@
-chore: update WoW globals list (added: 6418, removed: 0)
+chore: update WoW globals list (added: 0, removed: 6418)
