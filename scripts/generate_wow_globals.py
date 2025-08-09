@@ -4,36 +4,66 @@ import re
 import os
 import sys
 
-API_URL = "https://raw.githubusercontent.com/Gethe/wow-ui-source/live/Blizzard_APIDocumentation/Blizzard_APIDocumentation.lua"
-FRAMEXML_URL = "https://raw.githubusercontent.com/Gethe/wow-ui-source/live/FrameXML"
+API_WIKI_URL = "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"
+FRAMEXML_ZIP_URL = "https://github.com/Gethe/wow-ui-source/archive/refs/heads/live.zip"
 
 OUTPUT_FILE = "wow_globals.lua"
 
+# Patterns to match globals in FrameXML Lua files
+PATTERNS = [
+    re.compile(r"^\s*(\w+)\s*="),             # top-level assignments
+    re.compile(r"^\s*_G\[['\"](\w+)['\"]\]\s*="),  # _G["Name"] =
+    re.compile(r"^\s*_G\.(\w+)\s*="),         # _G.Name =
+    re.compile(r"^\s*function\s+(\w+)\s*\("), # function Name(
+]
+
 def fetch_api_globals():
-    print("Fetching WoW API globals...")
-    resp = requests.get(API_URL)
-    resp.raise_for_status()
-    text = resp.text
-
-    globals_found = re.findall(r'name\s*=\s*"([A-Za-z_][A-Za-z0-9_]*)"', text)
-    return set(globals_found)
-
-def fetch_framexml_globals():
-    print("Fetching FrameXML globals...")
-    globals_set = set()
-
-    resp = requests.get(FRAMEXML_URL)
+    print("Fetching WoW API globals from warcraft.wiki.gg...")
+    resp = requests.get(API_WIKI_URL)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    for link in soup.find_all("a", href=True):
-        href = link["href"]
-        if href.endswith(".lua"):
-            file_url = f"{FRAMEXML_URL}/{href}"
-            lua_text = requests.get(file_url).text
-            matches = re.findall(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=", lua_text, flags=re.M)
-            globals_set.update(matches)
+    globals_found = set()
+    for a in soup.select('a[href^="/wiki/API_"]'):
+        name = a.text.strip()
+        if name:
+            globals_found.add(name)
+    print(f"Found {len(globals_found)} API globals.")
+    return globals_found
 
+def fetch_framexml_globals():
+    print("Downloading FrameXML source from GitHub...")
+    resp = requests.get(FRAMEXML_ZIP_URL)
+    resp.raise_for_status()
+
+    import tempfile
+    import zipfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        zip_path = os.path.join(tmpdir, "framexml.zip")
+        with open(zip_path, "wb") as f:
+            f.write(resp.content)
+
+        print("Extracting FrameXML...")
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(tmpdir)
+
+        globals_set = set()
+        for root, _, files in os.walk(tmpdir):
+            for fname in files:
+                if fname.endswith(".lua"):
+                    fpath = os.path.join(root, fname)
+                    try:
+                        with open(fpath, encoding="utf-8", errors="ignore") as fh:
+                            for line in fh:
+                                for pattern in PATTERNS:
+                                    m = pattern.match(line)
+                                    if m:
+                                        globals_set.add(m.group(1))
+                    except Exception as e:
+                        print(f"Warning: Skipping {fpath} due to error: {e}")
+
+    print(f"Found {len(globals_set)} FrameXML globals.")
     return globals_set
 
 def generate_luacheckrc_entry(globals_list):
@@ -61,7 +91,7 @@ def main():
         f.write(lua_output)
 
     print(f"Wrote {len(all_globals)} globals to {OUTPUT_FILE}.")
-    # Exit with globals count so workflow can use it
+    # Print count as last line for GitHub Action output parsing
     print(len(all_globals))
 
 if __name__ == "__main__":
