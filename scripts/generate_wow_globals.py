@@ -69,22 +69,27 @@ def parse_framexml_globals(extracted_path):
     print(f"Found {len(globals_set)} FrameXML globals.")
     return globals_set
 
-def parse_globalstrings_globals(extracted_path):
-    print("Parsing GlobalStrings.lua globals...")
+def fetch_globalstrings_globals_ketho():
+    print("Fetching enUS.lua global strings from Ketho's BlizzardInterfaceResources repo...")
+    url = "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/GlobalStrings/enUS.lua"
+    resp = requests.get(url)
+    resp.raise_for_status()
+
     globals_set = set()
-    for root, _, files in os.walk(extracted_path):
-        for fname in files:
-            if fname == "GlobalStrings.lua":
-                fpath = os.path.join(root, fname)
-                try:
-                    with open(fpath, encoding="utf-8", errors="ignore") as fh:
-                        for line in fh:
-                            m = re.match(r"^\s*(\w+)\s*=", line)
-                            if m:
-                                globals_set.add(m.group(1))
-                except Exception as e:
-                    print(f"Warning: Could not parse {fpath}: {e}")
-    print(f"Found {len(globals_set)} globals in GlobalStrings.lua")
+    pattern1 = re.compile(r"^\s*(\w+)\s*=")                     # e.g. NAME = "..."
+    pattern2 = re.compile(r'^\s*_G\["([^"]+)"\]\s*=')          # e.g. _G["NAME"] = "..."
+
+    for line in resp.text.splitlines():
+        m1 = pattern1.match(line)
+        if m1:
+            globals_set.add(m1.group(1))
+            continue
+
+        m2 = pattern2.match(line)
+        if m2:
+            globals_set.add(m2.group(1))
+
+    print(f"Found {len(globals_set)} globals in enUS.lua")
     return globals_set
 
 def read_custom_globals():
@@ -148,9 +153,10 @@ def main():
     tmpdir = download_and_extract_framexml()
     try:
         framexml_globals = parse_framexml_globals(tmpdir.name)
-        globalstrings_globals = parse_globalstrings_globals(tmpdir.name)
     finally:
         tmpdir.cleanup()
+
+    globalstrings_globals = fetch_globalstrings_globals_ketho()
 
     custom_globals = read_custom_globals()
     all_globals = api_globals | framexml_globals | globalstrings_globals | custom_globals
