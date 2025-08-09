@@ -10089,7 +10089,7 @@ globals = {
     "ConsoleSetFontHeight",
     Constants = {
         fields = {
-
+            'AccountStoreConsts'
         }
     },
     "ContainedAlertFrameMixin",
@@ -13955,7 +13955,7 @@ globals = {
     "EndOfMatchFrameMixin",
     Enum = {
         fields = {
-
+            'AccountCurrencyTransferResult'
         }
     },
     "EnumerateFrames",
