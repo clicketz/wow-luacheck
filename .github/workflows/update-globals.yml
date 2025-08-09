@@ -2,22 +2,31 @@ name: Update WoW Globals Luacheck
 
 on:
   schedule:
-    # 12:00 PM PST (20:00 UTC) every Tuesday
-    - cron: '0 20 * * 2'
+    - cron: '0 20 * * 2'  # Tuesday 12:00 PM PST (20:00 UTC)
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   update-luacheck:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # Allow pushing changes
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore cache (.cache)
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: wow-globals-cache-${{ runner.os }}-v1
+          # using a static key; cache persists across runs and will be updated if the cache contents change
 
       - name: Set up Python 3.x
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
@@ -29,10 +38,20 @@ jobs:
       - name: Run globals update script
         run: python scripts/generate_wow_globals.py
 
+      - name: Save cache (.cache)
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: wow-globals-cache-${{ runner.os }}-v1
+
       - name: Commit and push changes if any
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .luacheckrc
-          git diff --cached --quiet || git commit -m "chore: update WoW globals list"
+          git add .luacheckrc wow_globals.lua wow_globals.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: update WoW globals list (auto)"
           git push
