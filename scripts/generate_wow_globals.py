@@ -3,24 +3,27 @@ import os
 import re
 import json
 import requests
+from slpp import slpp as lua
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 OUTPUT_LUACHECK = os.path.join(REPO_ROOT, ".luacheckrc")
 OUTPUT_LUA = os.path.join(REPO_ROOT, "wow_globals.lua")
 OUTPUT_JSON = os.path.join(REPO_ROOT, "wow_globals.json")
 CUSTOM_GLOBALS_PATH = os.path.join(REPO_ROOT, "custom_globals.txt")
+COMMIT_MSG_PATH = os.path.join(REPO_ROOT, "commit_message.txt")
+PREV_GLOBALS_PATH = os.path.join(REPO_ROOT, "prev_globals.txt")
 
 BASE_URL = "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/"
 GLOBAL_STRINGS_URL = "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/GlobalStrings/enUS.lua"
 
 FILES_TO_PARSE = {
-    "Events.lua": "events",
-    "FrameXML.lua": "global_vars_and_functions",
-    "Frames.lua": "simple_table",
-    "GlobalAPI.lua": "global_vars_and_functions",
-    "LuaEnum.lua": "simple_table",
-    "Mixins.lua": "global_vars_and_functions",
-    "WidgetAPI.lua": "global_vars_and_functions",
+    "Events.lua": "table",
+    "FrameXML.lua": "table",
+    "Frames.lua": "table",
+    "GlobalAPI.lua": "table",
+    "LuaEnum.lua": "table",
+    "Mixins.lua": "table",
+    "WidgetAPI.lua": "table",
 }
 
 def fetch_url(url):
@@ -29,39 +32,63 @@ def fetch_url(url):
     r.raise_for_status()
     return r.text
 
-def parse_simple_table(lua_text):
-    pattern = re.compile(r'(\w+)\s*=\s*["\'].*?["\']')
-    keys = set(m.group(1) for m in pattern.finditer(lua_text))
-    return keys
-
-def parse_events(lua_text):
-    return parse_simple_table(lua_text)
-
-def parse_global_vars_and_functions(lua_text):
+def extract_globals_from_table(table_dict):
+    """
+    Recursively extract globals and fields from a Lua table parsed as Python dict.
+    Returns:
+      globals_dict = { global_name: {"fields": [field1, field2, ...]}, ... }
+    """
     globals_dict = {}
 
-    func_pattern = re.compile(r'function\s+(\w+)\s*\(')
-    for match in func_pattern.finditer(lua_text):
-        globals_dict[match.group(1)] = None
-
-    assign_pattern = re.compile(r'^(\w+)\s*=\s*[^{}"\']', re.MULTILINE)
-    for match in assign_pattern.finditer(lua_text):
-        name = match.group(1)
-        if name not in globals_dict:
-            globals_dict[name] = None
-
-    table_pattern = re.compile(r'(\w+)\s*=\s*{([^}]*)}', re.DOTALL)
-    for match in table_pattern.finditer(lua_text):
-        global_name = match.group(1)
-        content = match.group(2)
-        field_pattern = re.compile(r'(\w+)\s*=')
-        fields = list(set(f.group(1) for f in field_pattern.finditer(content)))
-        if fields:
-            globals_dict[global_name] = {"fields": sorted(fields)}
+    for k, v in table_dict.items():
+        if isinstance(v, dict):
+            # Nested table: treat as global with fields
+            fields = []
+            for subk in v.keys():
+                if isinstance(subk, str):
+                    fields.append(subk)
+            globals_dict[k] = {"fields": sorted(fields)}
         else:
-            globals_dict[global_name] = None
+            # Simple global key with non-table value
+            globals_dict[k] = None
 
     return globals_dict
+
+def parse_lua_table_file(content):
+    """
+    Find first big Lua table in file content and parse with slpp.
+    Returns dict of globals extracted.
+    """
+    import re
+
+    # Try to find first "= {...}" assignment block
+    pattern = re.compile(r'=\s*({.*})', re.DOTALL)
+    match = pattern.search(content)
+    if not match:
+        # fallback: try to find standalone table literal
+        pattern2 = re.compile(r'({.*})', re.DOTALL)
+        match2 = pattern2.search(content)
+        if not match2:
+            print("No table literal found for parsing.")
+            return {}
+        table_str = match2.group(1)
+    else:
+        table_str = match.group(1)
+
+    # Remove Lua comments
+    table_str = re.sub(r'--\[\[.*?\]\]', '', table_str, flags=re.DOTALL)
+    table_str = re.sub(r'--.*', '', table_str)
+
+    # slpp expects well-formed Lua table, so remove trailing commas & whitespace
+    # (You can add more cleaning if needed)
+
+    try:
+        table_dict = lua.decode(table_str)
+    except Exception as e:
+        print(f"Failed to parse Lua table: {e}")
+        return {}
+
+    return extract_globals_from_table(table_dict)
 
 def parse_globalstrings(lua_text):
     """
@@ -186,11 +213,21 @@ def generate_json_globals_list(globals_dict, simple_globals):
     all_globals.update(globals_dict.keys())
     return json.dumps(sorted(all_globals), indent=2)
 
+def load_prev_globals():
+    if os.path.isfile(PREV_GLOBALS_PATH):
+        with open(PREV_GLOBALS_PATH, "r", encoding="utf-8") as f:
+            return set(line.strip() for line in f if line.strip())
+    return set()
+
+def write_commit_message(added, removed):
+    msg = f"chore: update WoW globals list (added: {added}, removed: {removed})\n"
+    with open(COMMIT_MSG_PATH, "w", encoding="utf-8") as f:
+        f.write(msg)
+
 def main():
     globals_dicts = []
     simple_globals_sets = []
 
-    # Parse all FILES_TO_PARSE
     for filename, parse_type in FILES_TO_PARSE.items():
         url = BASE_URL + filename
         try:
@@ -199,20 +236,12 @@ def main():
             print(f"Warning: failed to download {filename}: {e}")
             continue
 
-        if parse_type == "simple_table":
-            keys = parse_simple_table(content)
-            simple_globals_sets.append(keys)
-            print(f"Parsed {len(keys)} simple globals from {filename}")
-        elif parse_type == "events":
-            keys = parse_events(content)
-            simple_globals_sets.append(keys)
-            print(f"Parsed {len(keys)} event globals from {filename}")
-        elif parse_type == "global_vars_and_functions":
-            d = parse_global_vars_and_functions(content)
-            globals_dicts.append(d)
-            print(f"Parsed {len(d)} globals with possible fields from {filename}")
+        if parse_type == "table":
+            globals_dict = parse_lua_table_file(content)
+            globals_dicts.append(globals_dict)
+            print(f"Parsed {len(globals_dict)} globals from {filename}")
 
-    # Parse GlobalStrings/enUS.lua separately
+    # Parse GlobalStrings/enUS.lua separately for string globals
     try:
         globalstrings_content = fetch_url(GLOBAL_STRINGS_URL)
         gs_globals = parse_globalstrings(globalstrings_content)
@@ -221,7 +250,7 @@ def main():
     except Exception as e:
         print(f"Warning: failed to download or parse GlobalStrings/enUS.lua: {e}")
 
-    # Read custom globals file
+    # Read custom globals
     custom_dict, custom_simple = read_custom_globals()
     globals_dicts.append(custom_dict)
     simple_globals_sets.append(custom_simple)
@@ -231,17 +260,29 @@ def main():
     merged_dict, merged_simple = merge_globals(globals_dicts, simple_globals_sets)
     print(f"Total globals after merge: {len(merged_simple)} simple + {len(merged_dict)} with fields")
 
-    # Write .luacheckrc
+    # Compare with previous run to track additions/removals
+    merged_all = set(merged_simple) | set(merged_dict.keys())
+    prev_globals = load_prev_globals()
+
+    added = len(merged_all - prev_globals)
+    removed = len(prev_globals - merged_all)
+
+    write_commit_message(added, removed)
+
+    # Save current globals for next run
+    with open(PREV_GLOBALS_PATH, "w", encoding="utf-8") as f:
+        for g in sorted(merged_all):
+            f.write(g + "\n")
+
+    # Write outputs
     with open(OUTPUT_LUACHECK, "w", encoding="utf-8") as f:
         f.write(generate_luacheckrc(merged_dict, merged_simple))
     print(f"Wrote {OUTPUT_LUACHECK}")
 
-    # Write wow_globals.lua
     with open(OUTPUT_LUA, "w", encoding="utf-8") as f:
         f.write(generate_lua_globals_list(merged_dict, merged_simple))
     print(f"Wrote {OUTPUT_LUA}")
 
-    # Write JSON output
     with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
         f.write(generate_json_globals_list(merged_dict, merged_simple))
     print(f"Wrote {OUTPUT_JSON}")
