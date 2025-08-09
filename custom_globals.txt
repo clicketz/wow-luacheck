@@ -1,0 +1,12 @@
+# My AddOns
+BuffOverlay
+BuffOverlayDB
+BuffOverlayBorderTemplateMixin
+WhisperCraft
+WhisperCraftDB
+
+# Third Party AddOns
+ElvUF_Parent
+GAME_LOCALE
+LibStub
+Scorpio
