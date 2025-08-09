@@ -1,0 +1,1 @@
+chore: update WoW globals list (added: 14044, removed: 0)
