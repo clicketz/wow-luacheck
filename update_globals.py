@@ -33,9 +33,9 @@ RESOURCE_FILES = {
 }
 
 LUACHECKRC_PATH = ".luacheckrc"
+CUSTOM_GLOBALS_PATH = "custom_globals.lua"
 
 # This default content will be used if the .luacheckrc file does not exist.
-# It includes the standard sections you provided.
 DEFAULT_LUACHECKRC_CONTENT = """
 std = 'lua51'
 max_line_length = false
@@ -71,6 +71,10 @@ def parse_table_of_strings(content: str) -> list[str]:
     pattern = re.compile(r'^\s*"([^"]+)",?\s*$')
     globals_list = []
     for line in content.splitlines():
+        # Ignore comments and empty lines
+        line = line.strip()
+        if line.startswith('--') or not line:
+            continue
         match = pattern.match(line)
         if match:
             globals_list.append(match.group(1))
@@ -100,7 +104,6 @@ def parse_function_definitions(content: str) -> list[str]:
 
 def parse_enum_definitions(content: str) -> list[str]:
     """Parses files that define Lua 'enums' (tables assigned to Enum.*)."""
-    # Matches 'Enum.' followed by a name, then an equals sign.
     pattern = re.compile(r'^(Enum\.[A-Za-z0-9_]+)\s*=')
     globals_list = []
     for line in content.splitlines():
@@ -122,6 +125,7 @@ def fetch_and_parse_all() -> list[str]:
         "parse_enum_definitions": parse_enum_definitions,
     }
 
+    # 1. Fetch globals from Blizzard's files
     for name, info in RESOURCE_FILES.items():
         url = info["url"]
         parser_func = parser_functions[info["parser"]]
@@ -137,6 +141,21 @@ def fetch_and_parse_all() -> list[str]:
         found_globals = parser_func(response.text)
         print(f"--> Found {len(found_globals)} globals in '{name}'.")
         all_globals.update(found_globals)
+
+    # 2. Parse custom globals from the local file
+    print(f"Checking for custom globals in {CUSTOM_GLOBALS_PATH}...")
+    try:
+        with open(CUSTOM_GLOBALS_PATH, 'r', encoding='utf-8') as f:
+            content = f.read()
+        custom_globals = parse_table_of_strings(content)
+        print(f"--> Found {len(custom_globals)} custom globals.")
+        all_globals.update(custom_globals)
+    except FileNotFoundError:
+        print(f"::notice::{CUSTOM_GLOBALS_PATH} not found. Creating an empty one for you.")
+        with open(CUSTOM_GLOBALS_PATH, 'w', encoding='utf-8') as f:
+            f.write("-- Add your own custom global variables here.\n")
+            f.write("-- The script will automatically merge these with the fetched globals.\n")
+            f.write('-- Use the format "MyGlobal", one per line.\n\n')
 
     if not all_globals:
         print("::error::No globals were extracted in total. Halting execution.")
@@ -154,16 +173,13 @@ def update_luacheckrc(globals_list: list[str]):
     formatted_globals = ",\n    ".join(f'"{g}"' for g in globals_list)
     new_globals_block = f"globals = {{\n    {formatted_globals}\n}}"
 
-    # If .luacheckrc doesn't exist, create it with the default template.
     if not os.path.exists(LUACHECKRC_PATH):
         print(f"{LUACHECKRC_PATH} not found. Creating a new one with default settings.")
-        # Strip leading newline from the template and replace placeholder
         full_content = DEFAULT_LUACHECKRC_CONTENT.lstrip().format(globals_placeholder=new_globals_block)
         with open(LUACHECKRC_PATH, 'w', encoding='utf-8') as f:
             f.write(full_content)
         return
 
-    # If the file exists, read its content and intelligently replace or append the globals block.
     with open(LUACHECKRC_PATH, 'r', encoding='utf-8') as f:
         content = f.read()
     
