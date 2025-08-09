@@ -1,42 +1,38 @@
-name: Update WoW Globals
+name: Update WoW Globals Luacheck
 
 on:
   schedule:
-    - cron: '0 20 * * 2'  # Every Tuesday at 12:00 PM PST (20:00 UTC)
-  workflow_dispatch:      # Manual trigger
+    # 12:00 PM PST (20:00 UTC) every Tuesday
+    - cron: '0 20 * * 2'
+  workflow_dispatch:
 
 jobs:
-  update-globals:
+  update-luacheck:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Allow pushing changes
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Needed for git diff detection
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Python 3.x
+        uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
       - name: Install dependencies
-        run: pip install requests beautifulsoup4
-
-      - name: Run globals generator
-        id: gen_globals
         run: |
-          count=$(python scripts/generate_wow_globals.py | tail -n1)
-          echo "globals_count=$count" >> $GITHUB_OUTPUT
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
 
-      - name: Commit and push changes
+      - name: Run globals update script
+        run: python scripts/generate_wow_globals.py
+
+      - name: Commit and push changes if any
         run: |
-          if git diff --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .luacheckrc
-          git commit -m "chore: update WoW globals list (${{ steps.gen_globals.outputs.globals_count }})"
+          git diff --cached --quiet || git commit -m "chore: update WoW globals list"
           git push
