@@ -10087,11 +10087,6 @@ globals = {
     "ConsoleIsActive",
     "ConsolePrintAllMatchingCommands",
     "ConsoleSetFontHeight",
-    Constants = {
-        fields = {
-            'AccountStoreConsts'
-        }
-    },
     "ContainedAlertFrameMixin",
     "ContainedAlertSubSystemMixin",
     "ContainerFrameBackpackMixin",
@@ -13953,11 +13948,6 @@ globals = {
     "EncounterSearchResultLGMixin",
     "EndOfMatchButtonBaseMixin",
     "EndOfMatchFrameMixin",
-    Enum = {
-        fields = {
-            'AccountCurrencyTransferResult'
-        }
-    },
     "EnumerateFrames",
     "EnumerateServerChannels",
     "EquipCursorItem",
