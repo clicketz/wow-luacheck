@@ -85,14 +85,42 @@ def read_custom_globals():
 def generate_luacheckrc_content(globals_list):
     sorted_globals = sorted(globals_list)
     lines = [
-        'std = "none"',
+        "std = 'lua51'",
+        "max_line_length = false",
+        "exclude_files = {'**Libs/', '**libs/'}",
         "",
         "globals = {"
     ]
     for name in sorted_globals:
-        lines.append(f'    "{name}",')
+        lines.append(f"    '{name}',")
     lines.append("}")
-    return "\n".join(lines) + "\n"
+    lines.append("")
+    lines.append("ignore = {")
+    ignore_patterns = [
+        '11./SLASH_.*',  # Setting an undefined (Slash handler) global variable
+        '11./BINDING_.*',  # Setting an undefined (Keybinding header) global variable
+        '113/LE_.*',  # Accessing an undefined (Lua ENUM type) global variable
+        '113/NUM_LE_.*',  # Accessing an undefined (Lua ENUM type) global variable
+        '211',  # Unused local variable
+        '211/L',  # Unused local variable "L"
+        '211/CL',  # Unused local variable "CL"
+        '212',  # Unused argument
+        '213',  # Unused loop variable
+        '214',  # Unused hint
+        # '231',  # Set but never accessed (commented out)
+        '311',  # Value assigned to a local variable is unused
+        '314',  # Value of a field in a table literal is unused
+        '42.',  # Shadowing a local variable, an argument, a loop variable.
+        '43.',  # Shadowing an upvalue, an upvalue argument, an upvalue loop variable.
+        '542',  # An empty if branch
+        '581',  # Error-prone operator orders
+        '582',  # Error-prone operator orders
+    ]
+    for pattern in ignore_patterns:
+        lines.append(f"    '{pattern}',")
+    lines.append("}")
+    lines.append("")
+    return "\n".join(lines)
 
 def main():
     api_globals = fetch_api_globals()
