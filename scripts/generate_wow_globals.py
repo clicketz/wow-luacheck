@@ -3,6 +3,8 @@ from bs4 import BeautifulSoup
 import re
 import os
 import sys
+import tempfile
+import zipfile
 
 API_WIKI_URL = "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"
 FRAMEXML_ZIP_URL = "https://github.com/Gethe/wow-ui-source/archive/refs/heads/live.zip"
@@ -32,39 +34,57 @@ def fetch_api_globals():
     print(f"Found {len(globals_found)} API globals.")
     return globals_found
 
-def fetch_framexml_globals():
-    print("Downloading FrameXML source from GitHub...")
+def download_and_extract_framexml():
+    print("Downloading FrameXML source zip from GitHub...")
     resp = requests.get(FRAMEXML_ZIP_URL)
     resp.raise_for_status()
 
-    import tempfile
-    import zipfile
+    tmpdir = tempfile.TemporaryDirectory()
+    zip_path = os.path.join(tmpdir.name, "framexml.zip")
+    with open(zip_path, "wb") as f:
+        f.write(resp.content)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        zip_path = os.path.join(tmpdir, "framexml.zip")
-        with open(zip_path, "wb") as f:
-            f.write(resp.content)
+    print("Extracting FrameXML zip...")
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(tmpdir.name)
 
-        print("Extracting FrameXML...")
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(tmpdir)
+    return tmpdir  # caller must cleanup with tmpdir.cleanup()
 
-        globals_set = set()
-        for root, _, files in os.walk(tmpdir):
-            for fname in files:
-                if fname.endswith(".lua"):
-                    fpath = os.path.join(root, fname)
-                    try:
-                        with open(fpath, encoding="utf-8", errors="ignore") as fh:
-                            for line in fh:
-                                for pattern in PATTERNS:
-                                    m = pattern.match(line)
-                                    if m:
-                                        globals_set.add(m.group(1))
-                    except Exception as e:
-                        print(f"Warning: Skipping {fpath} due to error: {e}")
-
+def parse_framexml_globals(extracted_path):
+    print("Parsing FrameXML globals...")
+    globals_set = set()
+    for root, _, files in os.walk(extracted_path):
+        for fname in files:
+            if fname.endswith(".lua"):
+                fpath = os.path.join(root, fname)
+                try:
+                    with open(fpath, encoding="utf-8", errors="ignore") as fh:
+                        for line in fh:
+                            for pattern in PATTERNS:
+                                m = pattern.match(line)
+                                if m:
+                                    globals_set.add(m.group(1))
+                except Exception as e:
+                    print(f"Warning: Skipping {fpath} due to error: {e}")
     print(f"Found {len(globals_set)} FrameXML globals.")
+    return globals_set
+
+def parse_globalstrings_globals(extracted_path):
+    print("Parsing GlobalStrings.lua globals...")
+    globals_set = set()
+    for root, _, files in os.walk(extracted_path):
+        for fname in files:
+            if fname == "GlobalStrings.lua":
+                fpath = os.path.join(root, fname)
+                try:
+                    with open(fpath, encoding="utf-8", errors="ignore") as fh:
+                        for line in fh:
+                            m = re.match(r"^\s*(\w+)\s*=", line)
+                            if m:
+                                globals_set.add(m.group(1))
+                except Exception as e:
+                    print(f"Warning: Could not parse {fpath}: {e}")
+    print(f"Found {len(globals_set)} globals in GlobalStrings.lua")
     return globals_set
 
 def read_custom_globals():
@@ -124,9 +144,16 @@ def generate_luacheckrc_content(globals_list):
 
 def main():
     api_globals = fetch_api_globals()
-    framexml_globals = fetch_framexml_globals()
+
+    tmpdir = download_and_extract_framexml()
+    try:
+        framexml_globals = parse_framexml_globals(tmpdir.name)
+        globalstrings_globals = parse_globalstrings_globals(tmpdir.name)
+    finally:
+        tmpdir.cleanup()
+
     custom_globals = read_custom_globals()
-    all_globals = api_globals | framexml_globals | custom_globals
+    all_globals = api_globals | framexml_globals | globalstrings_globals | custom_globals
     new_content = generate_luacheckrc_content(all_globals)
 
     if os.path.exists(OUTPUT_FILE):
