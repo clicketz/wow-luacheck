@@ -91,35 +91,68 @@ def parse_global_assignments(content: str) -> list[str]:
 
 def parse_api_definitions(content: str) -> list[str]:
     """
-    Parses complex API files that define both functions and global tables.
-    This is more robust to avoid capturing the content of large tables.
+    Parses complex API files that define both functions and global tables,
+    including fields within those tables, by tracking nested braces.
     """
     globals_list = []
     # Matches: function MyFunction(...)
-    func_pattern = re.compile(r'^function\s+([A-Za-z0-9_:]+)\s*\(')
-    # Matches: MyTable = { 
-    table_pattern = re.compile(r'^([A-Z][a-zA-Z0-9_]+)\s*=\s*\{')
+    func_pattern = re.compile(r'^\s*function\s+([A-Za-z0-9_:]+)\s*\(')
+    # Matches: MyTable = {
+    table_pattern = re.compile(r'^\s*([A-Z][a-zA-Z0-9_]+)\s*=\s*\{')
+    # Matches fields inside a table, like: 'ClearColorOverrides', or "ClearColorOverrides"
+    field_pattern = re.compile(r"^\s*['\"]([^'\"]+)['\"],?\s*$")
+
+    brace_depth = 0
+    in_fields_block = False
+    fields_start_depth = 0
 
     for line in content.splitlines():
-        func_match = func_pattern.match(line)
-        if func_match:
-            # Handle cases like 'Frame:Function()' by taking just 'Frame'
-            base_name = func_match.group(1).split(':')[0]
-            globals_list.append(base_name)
-            continue
+        stripped_line = line.strip()
 
-        table_match = table_pattern.match(line)
-        if table_match:
-            globals_list.append(table_match.group(1))
+        # If we are not inside any table, look for new functions or tables
+        if brace_depth == 0:
+            func_match = func_pattern.match(stripped_line)
+            if func_match:
+                base_name = func_match.group(1).split(':')[0]
+                globals_list.append(base_name)
+
+            table_match = table_pattern.match(stripped_line)
+            if table_match:
+                table_name = table_match.group(1)
+                globals_list.append(table_name)
+        
+        # If we are inside a table, check if we are entering a fields block
+        if brace_depth > 0 and not in_fields_block:
+            if 'fields = {' in stripped_line:
+                in_fields_block = True
+                # Record the brace depth at which this fields block started
+                fields_start_depth = brace_depth
+
+        # If we are inside a fields block, try to match fields
+        if in_fields_block:
+            field_match = field_pattern.match(stripped_line)
+            if field_match:
+                globals_list.append(field_match.group(1))
+
+        # Update brace depth for the current line AFTER processing it
+        brace_depth += line.count('{')
+        brace_depth -= line.count('}')
+
+        # If we were in a fields block and the depth is now equal to
+        # the depth where it started, we have exited the block.
+        if in_fields_block and brace_depth <= fields_start_depth:
+            in_fields_block = False
             
     return globals_list
 
 def parse_enum_definitions(content: str) -> list[str]:
     """Parses files that define Lua 'enums' (tables assigned to Enum.*)."""
-    pattern = re.compile(r'^(Enum\.[A-Za-z0-9_]+)\s*=')
+    # Allow for optional whitespace at the start of the line
+    pattern = re.compile(r'^\s*(Enum\.[A-Za-z0-9_]+)\s*=')
     globals_list = []
     for line in content.splitlines():
-        match = pattern.match(line)
+        # Strip the line to handle potential whitespace
+        match = pattern.match(line.strip())
         if match:
             globals_list.append(match.group(1))
     return globals_list
