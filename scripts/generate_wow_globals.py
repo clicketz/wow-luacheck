@@ -7,14 +7,16 @@ import sys
 API_WIKI_URL = "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"
 FRAMEXML_ZIP_URL = "https://github.com/Gethe/wow-ui-source/archive/refs/heads/live.zip"
 
-OUTPUT_FILE = "wow_globals.lua"
+# Calculate repo root and .luacheckrc output file path
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+OUTPUT_FILE = os.path.join(REPO_ROOT, ".luacheckrc")
 
-# Patterns to match globals in FrameXML Lua files
 PATTERNS = [
-    re.compile(r"^\s*(\w+)\s*="),             # top-level assignments
-    re.compile(r"^\s*_G\[['\"](\w+)['\"]\]\s*="),  # _G["Name"] =
-    re.compile(r"^\s*_G\.(\w+)\s*="),         # _G.Name =
-    re.compile(r"^\s*function\s+(\w+)\s*\("), # function Name(
+    re.compile(r"^\s*(\w+)\s*="),
+    re.compile(r"^\s*_G\[['\"](\w+)['\"]\]\s*="),
+    re.compile(r"^\s*_G\.(\w+)\s*="),
+    re.compile(r"^\s*function\s+(\w+)\s*\("),
 ]
 
 def fetch_api_globals():
@@ -66,9 +68,13 @@ def fetch_framexml_globals():
     print(f"Found {len(globals_set)} FrameXML globals.")
     return globals_set
 
-def generate_luacheckrc_entry(globals_list):
+def generate_luacheckrc_content(globals_list):
     sorted_globals = sorted(globals_list)
-    lines = ["globals = {"]
+    lines = [
+        'std = "none"',
+        "",
+        "globals = {"
+    ]
     for name in sorted_globals:
         lines.append(f'    "{name}",')
     lines.append("}")
@@ -78,21 +84,20 @@ def main():
     api_globals = fetch_api_globals()
     framexml_globals = fetch_framexml_globals()
     all_globals = api_globals | framexml_globals
-    lua_output = generate_luacheckrc_entry(all_globals)
+    new_content = generate_luacheckrc_content(all_globals)
 
     if os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
             current_content = f.read()
-        if current_content == lua_output:
-            print("No changes to globals list. Exiting.")
+        if current_content == new_content:
+            print("No changes to .luacheckrc. Exiting.")
             sys.exit(0)
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(lua_output)
+        f.write(new_content)
 
     print(f"Wrote {len(all_globals)} globals to {OUTPUT_FILE}.")
-    # Print count as last line for GitHub Action output parsing
-    print(len(all_globals))
+    print(len(all_globals))  # For GitHub Actions output parsing
 
 if __name__ == "__main__":
     main()
