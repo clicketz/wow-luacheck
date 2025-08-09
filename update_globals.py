@@ -20,7 +20,7 @@ RESOURCE_FILES = {
     },
     "GlobalAPI": {
         "url": "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/GlobalAPI.lua",
-        "parser": "parse_function_definitions"
+        "parser": "parse_api_definitions" # Using a more specific parser for this complex file
     },
     "LuaEnum": {
         "url": "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/LuaEnum.lua",
@@ -71,7 +71,6 @@ def parse_table_of_strings(content: str) -> list[str]:
     pattern = re.compile(r'^\s*"([^"]+)",?\s*$')
     globals_list = []
     for line in content.splitlines():
-        # Ignore comments and empty lines
         line = line.strip()
         if line.startswith('--') or not line:
             continue
@@ -90,16 +89,29 @@ def parse_global_assignments(content: str) -> list[str]:
             globals_list.append(match.group(1))
     return globals_list
 
-def parse_function_definitions(content: str) -> list[str]:
-    """Parses files that contain global function definitions."""
-    pattern = re.compile(r'^function\s+([A-Za-z0-9_:]+)\s*\(')
+def parse_api_definitions(content: str) -> list[str]:
+    """
+    Parses complex API files that define both functions and global tables.
+    This is more robust to avoid capturing the content of large tables.
+    """
     globals_list = []
+    # Matches: function MyFunction(...)
+    func_pattern = re.compile(r'^function\s+([A-Za-z0-9_:]+)\s*\(')
+    # Matches: MyTable = { 
+    table_pattern = re.compile(r'^([A-Z][a-zA-Z0-9_]+)\s*=\s*\{')
+
     for line in content.splitlines():
-        match = pattern.match(line)
-        if match:
+        func_match = func_pattern.match(line)
+        if func_match:
             # Handle cases like 'Frame:Function()' by taking just 'Frame'
-            func_name = match.group(1).split(':')[0]
-            globals_list.append(func_name)
+            base_name = func_match.group(1).split(':')[0]
+            globals_list.append(base_name)
+            continue
+
+        table_match = table_pattern.match(line)
+        if table_match:
+            globals_list.append(table_match.group(1))
+            
     return globals_list
 
 def parse_enum_definitions(content: str) -> list[str]:
@@ -121,7 +133,7 @@ def fetch_and_parse_all() -> list[str]:
     parser_functions = {
         "parse_table_of_strings": parse_table_of_strings,
         "parse_global_assignments": parse_global_assignments,
-        "parse_function_definitions": parse_function_definitions,
+        "parse_api_definitions": parse_api_definitions,
         "parse_enum_definitions": parse_enum_definitions,
     }
 
@@ -169,14 +181,11 @@ def update_luacheckrc(globals_list: list[str]):
     """Updates the .luacheckrc file with the provided list of globals."""
     print(f"Updating {LUACHECKRC_PATH}...")
     
-    # Format the new globals block robustly to prevent trailing commas.
     indented_globals = []
     for g in globals_list:
-        # Escape any double quotes within the global name itself, just in case.
         escaped_g = g.replace('"', '\\"')
         indented_globals.append(f'    "{escaped_g}"')
     
-    # Join with comma and newline. This is safer than using join with the comma inside.
     formatted_globals = ",\n".join(indented_globals)
     new_globals_block = f"globals = {{\n{formatted_globals}\n}}"
 
