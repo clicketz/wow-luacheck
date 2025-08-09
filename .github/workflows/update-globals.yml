@@ -1,0 +1,33 @@
+name: Update WoW Globals
+
+on:
+  workflow_dispatch:    # Allow manual run
+  schedule:
+    - cron: "0 6 * * 0" # Every Sunday at 06:00 UTC
+
+jobs:
+  update-globals:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}  # Needed for push
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.x"
+
+    - name: Install dependencies
+      run: pip install requests beautifulsoup4
+
+    - name: Run globals generator
+      run: python scripts/generate_wow_globals.py
+
+    - name: Commit and push if changed
+      run: |
+        git add wow_globals.lua
+        git diff --cached --quiet || git commit -m "Update WoW globals [skip ci]"
+        git push
