@@ -98,10 +98,8 @@ def parse_framemxml_globals(content: str) -> dict:
     globals_map = defaultdict(lambda: {'fields': set()})
     simple_globals = set()
     
-    # Pattern for strings inside the local FrameXML and LoadOnDemand tables
     string_pattern = re.compile(r"['\"]([^'\"]+)['\"]")
     
-    # Find the FrameXML and LoadOnDemand tables and extract their string contents
     table_pattern = re.compile(r"^\s*local\s+(?:FrameXML|LoadOnDemand)\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
     for table_match in table_pattern.finditer(content):
         table_content = table_match.group(1)
@@ -124,7 +122,6 @@ def parse_api_definitions(content: str) -> dict:
     globals_map = defaultdict(lambda: {'fields': set()})
     simple_globals = set()
     
-    # Process C_ API tables
     c_table_pattern = re.compile(r"^\s*(C_[A-Za-z0-9_]+)\s*=\s*\{.*?fields\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
     string_pattern = re.compile(r"['\"]([^'\"]+)['\"]")
     for table_match in c_table_pattern.finditer(content):
@@ -132,7 +129,6 @@ def parse_api_definitions(content: str) -> dict:
         for field_match in string_pattern.finditer(fields_content):
             globals_map[table_name]['fields'].add(field_match.group(1))
 
-    # Process simple global functions and local API tables
     for match in re.finditer(r"^\s*function\s+([A-Za-z0-9_:]+)", content, re.MULTILINE):
         simple_globals.add(match.group(1).split(':')[0])
 
@@ -152,11 +148,9 @@ def parse_enum_definitions(content: str) -> dict:
     globals_map = defaultdict(lambda: defaultdict(lambda: {'fields': set()}))
     simple_globals = set()
 
-    # 1. LE_ and NUM_LE_ constants
     for match in re.finditer(r"^\s*((?:NUM_)?LE_[A-Z0-9_]+)\s*=", content, re.MULTILINE):
         simple_globals.add(match.group(1))
 
-    # 2. Top-level tables (Enum, Constants) and their direct children
     table_block_pattern = re.compile(r"^\s*(Enum|Constants)\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
     sub_table_pattern = re.compile(r"\s*([A-Z][A-Za-z0-9_]+)\s*=\s*\{(.*?)\}", re.DOTALL)
     field_pattern = re.compile(r"^\s*([A-Z][A-Za-z0-9_]+)\s*=", re.MULTILINE)
@@ -171,7 +165,6 @@ def parse_enum_definitions(content: str) -> dict:
     for s in simple_globals:
         globals_map[s] = True
 
-    # Convert sets to sorted lists for consistent output
     final_map = {}
     for k, v in globals_map.items():
         if isinstance(v, defaultdict):
@@ -251,7 +244,7 @@ def format_globals_recursive(data, indent=1):
             table_str += ",\n".join(sub_parts)
             table_str += f"\n{indent_str}}}"
             parts.append(table_str)
-        elif isinstance(value, list): # This is for 'fields' or simple lists of strings
+        elif isinstance(value, list):
              field_str = f"{indent_str}{key} = {{\n"
              field_str += ",\n".join([f"{indent_str}    '{f}'" for f in sorted(value)])
              field_str += f"\n{indent_str}}}"
