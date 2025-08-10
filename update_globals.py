@@ -115,7 +115,7 @@ def parse_framemxml_globals(content: str) -> dict:
         if s not in globals_map:
             globals_map[s] = True
 
-    return {k: ({'fields': sorted(list(v['fields']))} if isinstance(v, dict) else v) for k, v in globals_map.items()}
+    return {k: ({'fields': v['fields']} if isinstance(v, dict) else v) for k, v in globals_map.items()}
 
 def parse_api_definitions(content: str) -> dict:
     """Parses complex API files by finding C_TableName assignments and their fields."""
@@ -141,7 +141,7 @@ def parse_api_definitions(content: str) -> dict:
         if s not in globals_map:
             globals_map[s] = True
 
-    return {k: ({'fields': sorted(list(v['fields']))} if isinstance(v, dict) else v) for k, v in globals_map.items()}
+    return {k: ({'fields': v['fields']} if isinstance(v, dict) else v) for k, v in globals_map.items()}
 
 def parse_enum_definitions(content: str) -> dict:
     """Parses LuaEnum files for Enum tables and LE_ constants."""
@@ -168,7 +168,7 @@ def parse_enum_definitions(content: str) -> dict:
     final_map = {}
     for k, v in globals_map.items():
         if isinstance(v, defaultdict):
-            final_map[k] = {sub_k: {'fields': sorted(list(sub_v['fields']))} for sub_k, sub_v in v.items()}
+            final_map[k] = {sub_k: {'fields': sub_v['fields']} for sub_k, sub_v in v.items()}
         else:
             final_map[k] = v
     return final_map
@@ -176,11 +176,12 @@ def parse_enum_definitions(content: str) -> dict:
 # --- Main Logic ---
 
 def merge_globals(d1, d2):
-    """Recursively merges two dictionaries of globals."""
+    """Recursively merges two dictionaries of globals, correctly merging 'fields' sets."""
     for k, v in d2.items():
         if k in d1 and isinstance(d1.get(k), dict) and isinstance(v, dict):
             merge_globals(d1[k], v)
-        else:
+        elif not (isinstance(d1.get(k), dict) and v is True):
+             # Don't downgrade a dict to True, otherwise overwrite
             d1[k] = v
 
 def fetch_and_parse_all() -> dict:
@@ -255,6 +256,15 @@ def update_luacheckrc(globals_dict: dict):
     """Updates the .luacheckrc file with the provided dictionary of globals."""
     print(f"Updating {LUACHECKRC_PATH}...")
     
+    # Convert sets to sorted lists before formatting
+    for k, v in globals_dict.items():
+        if isinstance(v, dict):
+            for sub_k, sub_v in v.items():
+                if isinstance(sub_v, dict) and 'fields' in sub_v:
+                    sub_v['fields'] = sorted(list(sub_v['fields']))
+            if 'fields' in v:
+                v['fields'] = sorted(list(v['fields']))
+
     formatted_parts = format_globals_recursive(globals_dict)
     new_globals_block_content = ",\n".join(formatted_parts)
     new_globals_block = f"globals = {{\n{new_globals_block_content}\n}}"
