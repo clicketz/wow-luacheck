@@ -36329,6 +36329,7 @@ globals = {
     "TemplateInfoCacheMixin",
     "TemplatedListElementMixin",
     "TemplatedListMixin",
+    "Test2",
     "TextEditButton_OnClick",
     "TextSizeManagerBase",
     "TextStatusBarMixin",
