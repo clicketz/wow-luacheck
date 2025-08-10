@@ -16440,6 +16440,7 @@ globals = {
     "EndOfMatchFrameMixin",
     "EntitlementDeliveredAlertFrame_SetUp",
     "EntitlementDelivered_OnClick",
+    "Enum",
     EnumUtil = {
         fields = {
             'GenerateNameTranslation',
