@@ -19,6 +19,7 @@
 "ACCOUNT_WIDE_FONT_COLOR",
 "C_AddOns",
 "DebuffTypeColor",
+"Enum",
 "EventRegistry",
 "Menu",
 "NORMAL_FONT_COLOR",
