@@ -20,7 +20,6 @@
 "C_AddOns",
 "DebuffTypeColor",
 "Enum",
-"Test2",
 "EventRegistry",
 "Menu",
 "NORMAL_FONT_COLOR",
