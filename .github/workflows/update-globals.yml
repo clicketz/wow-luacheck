@@ -40,11 +40,39 @@ jobs:
       - name: Fetch and update globals
         run: python update_globals.py
 
-      # 5. Commit the changes to .luacheckrc and custom_globals.lua if there are any
+      # 5. Prepare commit message with diff stats
+      - name: Prepare Commit Message
+        id: prep_commit
+        run: |
+          # Stage the files to be able to diff them against the repo state
+          # Use "git add -N" to stage new files for diffing without actually adding them yet
+          git add -N .luacheckrc custom_globals.lua
+
+          # Check if there are any changes to the tracked files
+          if git diff --quiet .luacheckrc custom_globals.lua; then
+            echo "No changes to commit."
+            echo "CHANGES_EXIST=false" >> $GITHUB_OUTPUT
+          else
+            echo "Changes detected. Preparing commit message."
+            # Get additions and deletions from the diff
+            stats=$(git diff --numstat .luacheckrc custom_globals.lua)
+            additions=$(echo "$stats" | awk '{s+=$1} END {print s}')
+            deletions=$(echo "$stats" | awk '{s+=$2} END {print s}')
+            
+            # Create the stats string, e.g., (+123 -45)
+            stats_string="(+${additions:-0} -${deletions:-0})"
+            
+            # Set the full commit message as an environment variable for the next step
+            echo "COMMIT_MESSAGE=chore(globals): Update WoW globals ${stats_string}" >> $GITHUB_ENV
+            echo "CHANGES_EXIST=true" >> $GITHUB_OUTPUT
+          fi
+
+      # 6. Commit the changes to .luacheckrc and custom_globals.lua if there are any
       - name: Commit and push if changed
+        if: steps.prep_commit.outputs.CHANGES_EXIST == 'true'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore(globals): Update WoW globals"
+          commit_message: ${{ env.COMMIT_MESSAGE }}
           file_pattern: .luacheckrc custom_globals.lua
           commit_user_name: "GitHub Actions Bot"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"
