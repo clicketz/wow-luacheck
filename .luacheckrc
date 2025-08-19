@@ -34914,6 +34914,7 @@ globals = {
     "StaticPopup_IsAnyDialogShown",
     "StaticPopup_IsCustomGenericConfirmationShown",
     "StaticPopup_IsLastDisplayedFrame",
+    "StaticPopup_IsSpecial",
     "StaticPopup_OnAcceptWithSpinner",
     "StaticPopup_OnClick",
     "StaticPopup_OnCloseButtonClicked",
