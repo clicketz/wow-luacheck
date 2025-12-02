@@ -3392,6 +3392,7 @@ globals = {
     "BLIZZARD_STORE_VAS_ERROR_OTHER",
     "BLIZZARD_STORE_VAS_ERROR_RACE_CLASS_COMBO_INELIGIBLE",
     "BLIZZARD_STORE_VAS_ERROR_REALM_NOT_ELIGIBLE",
+    "BLIZZARD_STORE_VAS_ERROR_TIMERUNNER_NOT_ALLOWED",
     "BLIZZARD_STORE_VAS_ERROR_TOO_MUCH_MONEY_FOR_LEVEL",
     "BLIZZARD_STORE_VAS_ERROR_UNDER_MIN_LEVEL_REQ",
     "BLIZZARD_STORE_VAS_NO_ELIGIBLE_CHARACTERS",
@@ -4545,6 +4546,7 @@ globals = {
     "CATALOG_SHOP_TYPE_VC_WARBAND",
     "CATALOG_SHOP_WOW_FLAVOR_CLASSIC",
     "CATALOG_SHOP_WOW_FLAVOR_MODERN",
+    "CATALOG_SHOP_WOW_FLAVOR_TRR",
     "CATCH_PET",
     "CATCH_PET_CONDITION",
     "CATCH_PET_DESCRIPTION",
@@ -18635,6 +18637,7 @@ globals = {
     GameRulesUtil = {
         fields = {
             'GarrisonLandingPageAllowed',
+            'GetEffectiveMaxLevelForPlayer',
             'IsTimerunningSeasonActive',
             'ScenariosEnabled',
             'ShouldOrderHallBeActive',
