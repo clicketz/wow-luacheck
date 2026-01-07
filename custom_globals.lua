@@ -18,9 +18,12 @@
 -- My Additions
 "ACCOUNT_WIDE_FONT_COLOR",
 "C_AddOns",
+"CLASS_SORT_ORDER",
 "DebuffTypeColor",
 "Enum",
 "EventRegistry",
+"LOCALIZED_CLASS_NAMES_MALE",
+"MAX_CLASSES",
 "Menu",
 "NORMAL_FONT_COLOR",
 "NUM_CHAT_WINDOWS",
