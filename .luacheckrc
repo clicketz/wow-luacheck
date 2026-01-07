@@ -17073,6 +17073,7 @@ globals = {
     "EditModeVehicleSeatIndicatorSystemMixin",
     "EffectFactoryMixin",
     "EjectPassengerFromSeat",
+    "ElvUF_Parent",
     "ElvUI",
     "ElvUIPlayerNamePlateAnchor",
     "EmbeddedItemTooltip",
