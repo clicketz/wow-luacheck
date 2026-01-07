@@ -5,7 +5,6 @@ import requests
 from collections import defaultdict
 
 # --- Configuration ---
-# A dictionary mapping a descriptive name to its raw file URL and a parsing function.
 RESOURCE_FILES = {
     "FrameXML": {
         "url": "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/mainline/Resources/FrameXML.lua",
@@ -40,30 +39,26 @@ RESOURCE_FILES = {
 LUACHECKRC_PATH = ".luacheckrc"
 CUSTOM_GLOBALS_PATH = "custom_globals.lua"
 
-# This default content will be used if the .luacheckrc file does not exist.
 DEFAULT_LUACHECKRC_CONTENT = """
 std = 'lua51'
 max_line_length = false
 exclude_files = {'**Libs/', '**libs/'}
 ignore = {
-    '11./SLASH_.*', -- Setting an undefined (Slash handler) global variable
-    '11./BINDING_.*', -- Setting an undefined (Keybinding header) global variable
-    '113/LE_.*', -- Accessing an undefined (Lua ENUM type) global variable
-    '113/NUM_LE_.*', -- Accessing an undefined (Lua ENUM type) global variable
-    '211', -- Unused local variable
-    '211/L', -- Unused local variable "L"
-    '211/CL', -- Unused local variable "CL"
-    '212', -- Unused argument
-    '213', -- Unused loop variable
-    '214', -- Unused hint
-    -- '231', -- Set but never accessed
-    '311', -- Value assigned to a local variable is unused
-    '314', -- Value of a field in a table literal is unused
-    '42.', -- Shadowing a local variable, an argument, a loop variable.
-    '43.', -- Shadowing an upvalue, an upvalue argument, an upvalue loop variable.
-    '542', -- An empty if branch
-    '581', -- Error-prone operator orders
-    '582', -- Error-prone operator orders
+    '11./SLASH_.*',
+    '11./BINDING_.*',
+    '113/LE_.*',
+    '113/NUM_LE_.*',
+    '211',
+    '212',
+    '213',
+    '214',
+    '311',
+    '314',
+    '42.',
+    '43.',
+    '542',
+    '581',
+    '582',
 }
 
 {globals_placeholder}
@@ -93,14 +88,42 @@ def parse_global_assignments(content: str) -> dict:
             globals_map[match.group(1)] = True
     return globals_map
 
+def parse_custom_file_globals(content: str) -> dict:
+    """
+    Robustly parses the custom_globals.lua file.
+    Supports both list style ("Var",) and key-value style (Var = true).
+    """
+    globals_map = {}
+    # Matches "GlobalName" or 'GlobalName'
+    string_pattern = re.compile(r'["\']([^"\']+)["\']')
+    # Matches GlobalName = ...
+    assignment_pattern = re.compile(r'([A-Za-z0-9_]+)\s*=')
+
+    for line in content.splitlines():
+        line = line.strip()
+        if line.startswith('--') or not line: continue
+        
+        # Check for assignment first (e.g. MyVar = true)
+        assign_match = assignment_pattern.match(line)
+        if assign_match:
+            globals_map[assign_match.group(1)] = True
+            continue
+            
+        # Check for string (e.g. "MyVar",)
+        str_match = string_pattern.search(line)
+        if str_match:
+            globals_map[str_match.group(1)] = True
+            
+    return globals_map
+
 def parse_framemxml_globals(content: str) -> dict:
     """Parses FrameXML.lua for simple functions, tables, and table methods."""
     globals_map = defaultdict(lambda: {'fields': set()})
     simple_globals = set()
     
     string_pattern = re.compile(r"['\"]([^'\"]+)['\"]")
-    
     table_pattern = re.compile(r"^\s*local\s+(?:FrameXML|LoadOnDemand)\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
+    
     for table_match in table_pattern.finditer(content):
         table_content = table_match.group(1)
         for string_match in string_pattern.finditer(table_content):
@@ -124,6 +147,7 @@ def parse_api_definitions(content: str) -> dict:
     
     c_table_pattern = re.compile(r"^\s*(C_[A-Za-z0-9_]+)\s*=\s*\{.*?fields\s*=\s*\{(.*?)\}", re.DOTALL | re.MULTILINE)
     string_pattern = re.compile(r"['\"]([^'\"]+)['\"]")
+    
     for table_match in c_table_pattern.finditer(content):
         table_name, fields_content = table_match.groups()
         for field_match in string_pattern.finditer(fields_content):
@@ -181,7 +205,6 @@ def merge_globals(d1, d2):
         if k in d1 and isinstance(d1.get(k), dict) and isinstance(v, dict):
             merge_globals(d1[k], v)
         elif not (isinstance(d1.get(k), dict) and v is True):
-             # Don't downgrade a dict to True, otherwise overwrite
             d1[k] = v
 
 def fetch_and_parse_all() -> dict:
@@ -215,13 +238,14 @@ def fetch_and_parse_all() -> dict:
     print(f"Checking for custom globals in {CUSTOM_GLOBALS_PATH}...")
     try:
         with open(CUSTOM_GLOBALS_PATH, 'r', encoding='utf-8') as f:
-            custom_globals = parse_table_of_strings(f.read())
+            # Use the new robust parser for the custom file
+            custom_globals = parse_custom_file_globals(f.read())
         print(f"--> Found {len(custom_globals)} custom globals.")
         merge_globals(all_globals, custom_globals)
     except FileNotFoundError:
         print(f"::notice::{CUSTOM_GLOBALS_PATH} not found. Creating an empty one for you.")
         with open(CUSTOM_GLOBALS_PATH, 'w', encoding='utf-8') as f:
-            f.write("-- Add your own custom global variables here.\n")
+            f.write("-- Add your own custom global variables here. E.g.:\n-- MyGlobal = true\n-- \"AnotherGlobal\"\n")
 
     if not all_globals:
         print("::error::No globals were extracted in total. Halting execution.")
@@ -256,7 +280,7 @@ def update_luacheckrc(globals_dict: dict):
     """Updates the .luacheckrc file with the provided dictionary of globals."""
     print(f"Updating {LUACHECKRC_PATH}...")
     
-    # Convert sets to sorted lists before formatting
+    # Sort sets before formatting
     for k, v in globals_dict.items():
         if isinstance(v, dict):
             for sub_k, sub_v in v.items():
@@ -279,11 +303,31 @@ def update_luacheckrc(globals_dict: dict):
     with open(LUACHECKRC_PATH, 'r', encoding='utf-8') as f:
         content = f.read()
     
-    globals_start_index = content.find("globals = {")
-    if globals_start_index != -1:
-        print("Found existing globals table. Replacing it and anything after.")
-        base_content = content[:globals_start_index]
-        new_content = base_content.rstrip() + '\n\n' + new_globals_block + '\n'
+    # Intelligently find and replace ONLY the globals table
+    start_match = re.search(r"globals\s*=\s*\{", content)
+    if start_match:
+        print("Found existing globals table. Replacing it safely.")
+        start_index = start_match.start()
+        # Find the matching closing brace
+        brace_count = 0
+        end_index = -1
+        for i in range(start_index + len(start_match.group(0)) - 1, len(content)):
+            char = content[i]
+            if char == '{':
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    end_index = i + 1
+                    break
+        
+        if end_index != -1:
+            # Replace the block
+            new_content = content[:start_index] + new_globals_block + content[end_index:]
+        else:
+            # Fallback if braces are unbalanced (should rarely happen in valid lua files)
+            print("::warning::Could not find closing brace for globals table. Appending to end instead.")
+            new_content = content + '\n\n' + new_globals_block
     else:
         print("No globals table found. Appending a new one.")
         new_content = content.rstrip() + '\n\n' + new_globals_block + '\n'
@@ -293,9 +337,7 @@ def update_luacheckrc(globals_dict: dict):
     
     print("Update complete.")
 
-
 def main():
-    """Main function to run the script."""
     extracted_globals = fetch_and_parse_all()
     update_luacheckrc(extracted_globals)
 
